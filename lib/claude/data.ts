@@ -816,6 +816,50 @@ export async function listToolUsage(): Promise<ToolUsage[]> {
     .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
 }
 
+const sessionUsageCache = new Map<string, { mtimeMs: number; usage: TokenUsage }>();
+
+function scanUsage(raw: string): TokenUsage {
+  const total = emptyUsage();
+  const seen = new Set<string>();
+  for (const line of raw.split('\n')) {
+    if (!line.includes('"usage"')) continue;
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (entry?.type !== 'assistant') continue;
+    const id = entry.message?.id;
+    if (typeof id !== 'string' || seen.has(id)) continue;
+    seen.add(id);
+    const u = readUsage(entry.message?.usage);
+    if (u) addUsage(total, u);
+  }
+  return total;
+}
+
+/** Token totals per session id for one project, from an mtime-keyed cache. */
+export async function listSessionUsage(slug: string): Promise<Map<string, TokenUsage>> {
+  const out = new Map<string, TokenUsage>();
+  for (const f of await sessionFiles(slug)) {
+    const full = path.join(projectDir(slug), f.name);
+    let cached = sessionUsageCache.get(full);
+    if (!cached || cached.mtimeMs !== f.mtime.getTime()) {
+      let raw;
+      try {
+        raw = await fs.readFile(full, 'utf8');
+      } catch {
+        continue;
+      }
+      cached = { mtimeMs: f.mtime.getTime(), usage: scanUsage(raw) };
+      sessionUsageCache.set(full, cached);
+    }
+    out.set(f.name.replace(/\.jsonl$/, ''), cached.usage);
+  }
+  return out;
+}
+
 /** Bare-name deny rules currently in ~/.claude/settings.json permissions.deny. */
 export async function getDeniedTools(): Promise<string[]> {
   const settings = await getSettings();
