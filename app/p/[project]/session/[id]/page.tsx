@@ -77,7 +77,7 @@ export default async function Page({
       )}
       {subagents.length > 0 && (
         <details className="rounded-lg border bg-fd-card px-4 py-2 text-sm" open>
-          <summary className="cursor-pointer select-none text-xs font-medium uppercase tracking-wide text-fd-muted-foreground">
+          <summary className="cursor-pointer select-none text-sm font-medium text-fd-muted-foreground">
             Subagents ({subagents.length})
           </summary>
           <ul className="mt-2 flex flex-col gap-1">
@@ -94,7 +94,7 @@ export default async function Page({
       )}
       {changes.length > 0 && (
         <details className="rounded-lg border bg-fd-card px-4 py-2 text-sm" open>
-          <summary className="cursor-pointer select-none text-xs font-medium uppercase tracking-wide text-fd-muted-foreground">
+          <summary className="cursor-pointer select-none text-sm font-medium text-fd-muted-foreground">
             Files changed ({changes.length})
           </summary>
           <ul className="mt-2 flex flex-col gap-1">

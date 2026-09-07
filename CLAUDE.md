@@ -4,6 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 @AGENTS.md
 
+**Design system: Geist only.** All UI work follows `DESIGN.md` (Vercel's
+Geist/brand guidelines) and the "Design system: Geist only" section of
+`AGENTS.md`. No other design system, component kit, palette, or font family.
+
 ## Commands
 
 ```bash
@@ -47,3 +51,4 @@ Reads `~/.claude/projects/` at request time (`force-dynamic`). No database.
 - `lib/shared.ts` has route constants (`docsRoute`, `docsContentRoute`, etc.) and git config.
 - Tailwind v4 via `@tailwindcss/postcss`. Fumadocs CSS presets imported in `global.css`. Color tokens use `fd-*` prefix (from fumadocs-ui).
 - `cn` utility re-exported from `cnfast` at `lib/cn.ts`.
+- Geist tokens in `app/geist.css` drive the whole palette; `--color-fd-*` is remapped onto them. Vendored foundation for reference: `assets/vercel-brand.css`.

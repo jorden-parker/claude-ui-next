@@ -78,7 +78,7 @@ export function HistoryTimeline({ entries }: { entries: HistoryEntry[] }) {
       {groups.map(([day, items]) => (
         <section key={day}>
           <h3 className="mb-2 text-sm font-medium text-fd-muted-foreground">{day}</h3>
-          <ul className="flex flex-col gap-1">
+          <ul className="geist-ledger">
             {items.map((e, i) => {
               const body = (
                 <>
@@ -92,12 +92,12 @@ export function HistoryTimeline({ entries }: { entries: HistoryEntry[] }) {
                   {e.hasSession && e.slug && e.sessionId ? (
                     <Link
                       href={`/p/${e.slug}/session/${e.sessionId}`}
-                      className="flex items-baseline gap-3 rounded border bg-fd-card px-3 py-1.5 hover:bg-fd-secondary"
+                      className="flex items-baseline gap-3 rounded-md px-2 py-2 hover:bg-fd-accent"
                     >
                       {body}
                     </Link>
                   ) : (
-                    <div className="flex items-baseline gap-3 rounded border px-3 py-1.5 opacity-70">{body}</div>
+                    <div className="flex items-baseline gap-3 px-2 py-2 opacity-70">{body}</div>
                   )}
                 </li>
               );

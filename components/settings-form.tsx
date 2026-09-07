@@ -510,7 +510,7 @@ function FieldRowView({
 
   if (confirming) {
     return (
-      <li className="rounded border bg-fd-card px-3 py-2 text-sm">
+      <li className="bg-fd-muted px-2 py-3 text-sm">
         <p className="mb-2 font-mono text-xs">{CONFIRM_MESSAGE(row.key, confirmState.value)}</p>
         <div className="flex gap-2">
           <button
@@ -537,7 +537,7 @@ function FieldRowView({
   }
 
   return (
-    <li className="flex flex-wrap items-start gap-3 rounded border px-3 py-2">
+    <li className="flex flex-wrap items-start gap-3 px-2 py-3">
       <span className="w-56 shrink-0 break-all font-mono text-xs">{row.key}</span>
       <Badges row={row} />
       <div className="min-w-0 flex-1">
@@ -632,7 +632,7 @@ export function SettingsForm({
         .map((g) => (
           <section key={g}>
             <h3 className="mb-1 text-sm font-medium">{g}</h3>
-            <ul className="flex flex-col gap-1">
+            <ul className="geist-ledger">
               {(grouped.get(g) ?? []).map((row) => (
                 <FieldRowView
                   key={row.key}
@@ -662,7 +662,7 @@ function EnvRowView({
 }) {
   const [text, setText] = useState('');
   return (
-    <li className="flex flex-wrap items-start gap-3 rounded border px-3 py-2">
+    <li className="flex flex-wrap items-start gap-3 px-2 py-3">
       <span className="w-64 shrink-0 break-all font-mono text-xs">{row.name}</span>
       {row.secret && (
         <span className="rounded-full border px-1.5 py-0 text-[10px] text-fd-muted-foreground">secret</span>
@@ -763,7 +763,7 @@ export function EnvForm({ rows, specs, action }: { rows: EnvRow[]; specs: EnvSpe
       <section>
         <h3 className="mb-1 text-sm font-medium">Set variables</h3>
         {rows.length === 0 && <p className="text-xs text-fd-muted-foreground">None set.</p>}
-        <ul className="flex flex-col gap-1">
+        <ul className="geist-ledger">
           {rows.map((row) => (
             <EnvRowView
               key={row.name}
@@ -833,9 +833,9 @@ export function EnvForm({ rows, specs, action }: { rows: EnvRow[]; specs: EnvSpe
           {[...groups.entries()].map(([group, entries]) => (
             <div key={group}>
               <h4 className="mb-1 text-xs font-medium text-fd-muted-foreground">{group}</h4>
-              <ul className="flex flex-col gap-1">
+              <ul className="geist-ledger">
                 {entries.map((s) => (
-                  <li key={s.name} className="flex flex-wrap items-baseline gap-2 text-xs">
+                  <li key={s.name} className="flex flex-wrap items-baseline gap-2 px-2 py-2 text-xs">
                     <span className="font-mono">{s.name}</span>
                     {s.secret && <span className="text-fd-muted-foreground">(secret)</span>}
                     <span className="min-w-0 flex-1 text-fd-muted-foreground">{s.description}</span>

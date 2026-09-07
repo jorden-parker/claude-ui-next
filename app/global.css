@@ -1,5 +1,5 @@
 @import 'tailwindcss';
-@import 'fumadocs-ui/css/neutral.css';
+@import './geist.css';
 @import 'fumadocs-ui/css/preset.css';
 
 html {
@@ -11,87 +11,49 @@ html > body[data-scroll-locked] {
   --removed-body-scroll-bar-size: 0px !important;
 }
 
-/* highlight.js token colors for runtime markdown (rehype-highlight) */
+/*
+ * highlight.js token colours for runtime markdown (rehype-highlight).
+ * Every value is a Geist accent, so one rule set serves both themes.
+ */
 .hljs-comment,
-.hljs-quote {
-  color: #6a737d;
+.hljs-quote,
+.hljs-meta {
+  color: var(--color-geist-gray-800);
 }
 .hljs-keyword,
 .hljs-selector-tag,
 .hljs-subst {
-  color: #d73a49;
+  color: var(--color-geist-purple-900);
 }
 .hljs-number,
 .hljs-literal,
 .hljs-variable,
 .hljs-template-variable,
 .hljs-tag .hljs-attr {
-  color: #005cc5;
+  color: var(--color-geist-blue-900);
 }
 .hljs-string,
 .hljs-doctag,
 .hljs-regexp {
-  color: #032f62;
+  color: var(--color-geist-green-900);
 }
 .hljs-title,
 .hljs-section,
 .hljs-selector-id {
-  color: #6f42c1;
+  color: var(--color-geist-blue-700);
 }
 .hljs-type,
 .hljs-built_in {
-  color: #e36209;
+  color: var(--color-geist-amber-900);
 }
 .hljs-tag,
 .hljs-name,
 .hljs-attribute {
-  color: #22863a;
-}
-.hljs-meta {
-  color: #735c0f;
+  color: var(--color-geist-green-700);
 }
 .hljs-emphasis {
   font-style: italic;
 }
 .hljs-strong {
-  font-weight: bold;
-}
-
-.dark .hljs-comment,
-.dark .hljs-quote {
-  color: #8b949e;
-}
-.dark .hljs-keyword,
-.dark .hljs-selector-tag,
-.dark .hljs-subst {
-  color: #ff7b72;
-}
-.dark .hljs-number,
-.dark .hljs-literal,
-.dark .hljs-variable,
-.dark .hljs-template-variable,
-.dark .hljs-tag .hljs-attr {
-  color: #79c0ff;
-}
-.dark .hljs-string,
-.dark .hljs-doctag,
-.dark .hljs-regexp {
-  color: #a5d6ff;
-}
-.dark .hljs-title,
-.dark .hljs-section,
-.dark .hljs-selector-id {
-  color: #d2a8ff;
-}
-.dark .hljs-type,
-.dark .hljs-built_in {
-  color: #ffa657;
-}
-.dark .hljs-tag,
-.dark .hljs-name,
-.dark .hljs-attribute {
-  color: #7ee787;
-}
-.dark .hljs-meta {
-  color: #d29922;
+  font-weight: 500;
 }

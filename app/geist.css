@@ -1,0 +1,148 @@
+/*
+ * Geist design tokens for this app.
+ *
+ * Values are copied verbatim from the Vercel brand foundation vendored at
+ * assets/vercel-brand.css (see DESIGN.md). The Geist scales are the single
+ * source of colour, type, and spacing here; the Fumadocs `--color-fd-*`
+ * variables are re-pointed at them so the shell inherits the same system
+ * instead of running a second palette alongside it.
+ *
+ * Do not introduce another design system, palette, or icon/type family.
+ */
+
+:root {
+  color-scheme: light;
+}
+
+.dark {
+  color-scheme: dark;
+}
+
+@theme {
+  /* Type families -------------------------------------------------------- */
+  --font-sans: var(--font-geist-sans), -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: var(--font-geist-mono), 'SFMono-Regular', Consolas, monospace;
+
+  /* Geist background and gray scale -------------------------------------- */
+  --color-geist-background-100: light-dark(oklch(1 0 0), oklch(0 0 0));
+  --color-geist-background-200: light-dark(oklch(0.984 0 0), oklch(0.027 0 0));
+  --color-geist-gray-100: light-dark(oklch(0.961 0 0), oklch(0.218 0 0));
+  --color-geist-gray-200: light-dark(oklch(0.94 0 0), oklch(0.239 0 0));
+  --color-geist-gray-300: light-dark(oklch(0.925 0 0), oklch(0.281 0 0));
+  --color-geist-gray-400: light-dark(oklch(0.937 0 0), oklch(0.301 0 0));
+  --color-geist-gray-500: light-dark(oklch(0.836 0 0), oklch(0.39 0 0));
+  --color-geist-gray-600: light-dark(oklch(0.732 0 0), oklch(0.623 0 0));
+  --color-geist-gray-700: light-dark(oklch(0.65 0 0), oklch(0.65 0 0));
+  --color-geist-gray-800: light-dark(oklch(0.59 0 0), oklch(0.59 0 0));
+  --color-geist-gray-900: light-dark(oklch(0.42 0 0), oklch(0.706 0 0));
+  --color-geist-gray-1000: light-dark(oklch(0.205 0 0), oklch(0.946 0 0));
+
+  --color-geist-alpha-100: light-dark(oklch(0 0 0 / 0.05), oklch(1 0 0 / 0.07));
+  --color-geist-alpha-200: light-dark(oklch(0 0 0 / 0.081), oklch(1 0 0 / 0.09));
+  --color-geist-alpha-300: light-dark(oklch(0 0 0 / 0.1), oklch(1 0 0 / 0.13));
+  --color-geist-alpha-400: light-dark(oklch(0 0 0 / 0.08), oklch(1 0 0 / 0.14));
+  --color-geist-alpha-500: light-dark(oklch(0 0 0 / 0.21), oklch(1 0 0 / 0.24));
+  --color-geist-alpha-600: light-dark(oklch(0 0 0 / 0.24), oklch(1 0 0 / 0.51));
+  --color-geist-alpha-700: light-dark(oklch(0 0 0 / 0.44), oklch(1 0 0 / 0.54));
+
+  /* Geist accents — used only where they carry state meaning -------------- */
+  --color-geist-blue-100: light-dark(oklch(97.32% 0.0141 251.56), oklch(22.17% 0.069 259.89));
+  --color-geist-blue-700: light-dark(oklch(57.61% 0.2508 258.23), oklch(57.61% 0.2321 258.23));
+  --color-geist-blue-900: light-dark(oklch(53.18% 0.2399 256.99), oklch(71.7% 0.1648 250.794));
+  --color-geist-green-700: light-dark(oklch(64.58% 0.1746 147.27), oklch(64.58% 0.199 147.27));
+  --color-geist-green-900: light-dark(oklch(51.75% 0.1453 147.65), oklch(73.1% 0.2158 148.29));
+  --color-geist-amber-900: light-dark(oklch(52.79% 0.1496 54.65), oklch(77.21% 0.1991 64.28));
+  --color-geist-red-700: light-dark(oklch(62.56% 0.2524 23.03), oklch(62.56% 0.2234 23.03));
+  --color-geist-red-900: light-dark(oklch(54.99% 0.232 25.29), oklch(69.96% 0.2136 22.03));
+  --color-geist-purple-900: light-dark(oklch(50.93% 0.2554 302.32), oklch(73.14% 0.1651 305.42));
+
+  /* Fumadocs shell, re-pointed at Geist ---------------------------------- */
+  --color-fd-background: var(--color-geist-background-100);
+  --color-fd-foreground: var(--color-geist-gray-1000);
+  --color-fd-muted: var(--color-geist-background-200);
+  --color-fd-muted-foreground: var(--color-geist-gray-900);
+  --color-fd-popover: var(--color-geist-background-100);
+  --color-fd-popover-foreground: var(--color-geist-gray-1000);
+  --color-fd-card: var(--color-geist-background-200);
+  --color-fd-card-foreground: var(--color-geist-gray-1000);
+  --color-fd-border: var(--color-geist-alpha-400);
+  --color-fd-primary: var(--color-geist-gray-1000);
+  --color-fd-primary-foreground: var(--color-geist-background-100);
+  --color-fd-secondary: var(--color-geist-gray-100);
+  --color-fd-secondary-foreground: var(--color-geist-gray-1000);
+  --color-fd-accent: var(--color-geist-alpha-200);
+  --color-fd-accent-foreground: var(--color-geist-gray-1000);
+  --color-fd-ring: var(--color-geist-blue-700);
+  --color-fd-overlay: light-dark(oklch(0 0 0 / 0.2), oklch(0 0 0 / 0.5));
+
+  --color-fd-info: var(--color-geist-blue-700);
+  --color-fd-warning: var(--color-geist-amber-900);
+  --color-fd-error: var(--color-geist-red-700);
+  --color-fd-success: var(--color-geist-green-700);
+  --color-fd-idea: var(--color-geist-purple-900);
+
+  /* Diff marks: tinted from the Geist state colours, symbol always present. */
+  --color-fd-diff-remove: light-dark(oklch(62.56% 0.2524 23.03 / 0.1), oklch(62.56% 0.2234 23.03 / 0.16));
+  --color-fd-diff-remove-symbol: var(--color-geist-red-900);
+  --color-fd-diff-add: light-dark(oklch(64.58% 0.1746 147.27 / 0.1), oklch(64.58% 0.199 147.27 / 0.16));
+  --color-fd-diff-add-symbol: var(--color-geist-green-900);
+
+  /* Geist radii — restrained, two steps only ------------------------------ */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 10px;
+  --radius-2xl: 12px;
+}
+
+/* Geist text rendering. `calt` off and `ss11` on are the Geist defaults. */
+html {
+  font-feature-settings: 'rlig' 1, 'calt' 0, 'ss11' 1;
+  font-optical-sizing: auto;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Numbers that sit in a column line up. */
+.geist-numeric {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
+/*
+ * Ledger: hairline-separated rows on the page canvas. Geist prefers a rule
+ * and alignment over a box, so lists of records get a divider, not a card.
+ */
+.geist-ledger {
+  border-block: 1px solid var(--color-fd-border);
+}
+
+.geist-ledger > * + * {
+  border-top: 1px solid var(--color-fd-border);
+}
+
+.geist-row {
+  display: grid;
+  align-items: baseline;
+  gap: 4px 24px;
+  padding: 12px 8px;
+  margin-inline: -8px;
+  border-radius: var(--radius-md);
+  transition: background-color 120ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .geist-row {
+    transition: none;
+  }
+}
+
+a.geist-row:hover {
+  background-color: var(--color-geist-alpha-100);
+}
+
+a.geist-row:focus-visible {
+  outline: 2px solid var(--color-fd-ring);
+  outline-offset: -1px;
+}
