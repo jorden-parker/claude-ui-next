@@ -41,6 +41,19 @@ export type TranscriptBlock =
   | { kind: 'tool-use'; name: string; input: unknown; id: string; timestamp?: string }
   | { kind: 'tool-result'; toolUseId: string; text: string; isError: boolean; timestamp?: string };
 
+export interface TokenUsage {
+  input: number;
+  cacheCreation: number;
+  cacheRead: number;
+  output: number;
+  /** Distinct assistant messages (by message.id) that contributed to the totals. */
+  messages: number;
+}
+
+export function emptyUsage(): TokenUsage {
+  return { input: 0, cacheCreation: 0, cacheRead: 0, output: 0, messages: 0 };
+}
+
 export interface SessionMetadata {
   model: string | null;
   version: string | null;
@@ -51,6 +64,11 @@ export interface SessionMetadata {
   userMessages: number;
   assistantMessages: number;
   toolUses: number;
+  /** Summed once per distinct assistant message.id. */
+  tokens: TokenUsage;
+  /** Count and total of `system`/`turn_duration` entries. */
+  turns: number;
+  turnDurationMs: number;
 }
 
 export interface Transcript {
@@ -302,6 +320,27 @@ function isNoisePrompt(text: string): boolean {
   return text.startsWith('<') || text.startsWith('Caveat:');
 }
 
+function readUsage(usage: unknown): TokenUsage | null {
+  if (typeof usage !== 'object' || usage === null) return null;
+  const u = usage as Record<string, unknown>;
+  const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+  return {
+    input: n(u.input_tokens),
+    cacheCreation: n(u.cache_creation_input_tokens),
+    cacheRead: n(u.cache_read_input_tokens),
+    output: n(u.output_tokens),
+    messages: 1,
+  };
+}
+
+function addUsage(into: TokenUsage, u: TokenUsage): void {
+  into.input += u.input;
+  into.cacheCreation += u.cacheCreation;
+  into.cacheRead += u.cacheRead;
+  into.output += u.output;
+  into.messages += u.messages;
+}
+
 export async function listSessions(slug: string): Promise<SessionSummary[]> {
   const files = await sessionFiles(slug);
   return Promise.all(
@@ -361,9 +400,13 @@ export async function readTranscript(slug: string, id: string): Promise<Transcri
     userMessages: 0,
     assistantMessages: 0,
     toolUses: 0,
+    tokens: emptyUsage(),
+    turns: 0,
+    turnDurationMs: 0,
   };
   let skippedLines = 0;
   let truncated = false;
+  const seenMessageIds = new Set<string>();
 
   for (const line of lines) {
     if (blocks.length >= MAX_BLOCKS) {
@@ -410,6 +453,12 @@ export async function readTranscript(slug: string, id: string): Promise<Transcri
         skippedLines++;
       }
     } else if (entry.type === 'assistant') {
+      const messageId = typeof entry.message?.id === 'string' ? entry.message.id : null;
+      if (messageId !== null && !seenMessageIds.has(messageId)) {
+        seenMessageIds.add(messageId);
+        const usage = readUsage(entry.message?.usage);
+        if (usage) addUsage(meta.tokens, usage);
+      }
       const content = entry.message?.content;
       if (!Array.isArray(content)) {
         skippedLines++;
@@ -430,6 +479,9 @@ export async function readTranscript(slug: string, id: string): Promise<Transcri
           });
         }
       }
+    } else if (entry.type === 'system' && entry.subtype === 'turn_duration') {
+      meta.turns++;
+      if (typeof entry.durationMs === 'number') meta.turnDurationMs += entry.durationMs;
     } else {
       skippedLines++;
     }
