@@ -24,6 +24,12 @@ export function projectDisplayName(realPath: string | null, slug: string): strin
   return realPath?.split('/').pop() || realPath || slug;
 }
 
+/** Full path with the user's home directory collapsed to `~`. */
+export function projectDisplayPath(realPath: string | null, slug: string): string {
+  if (!realPath) return slug;
+  return realPath.replace(/^\/Users\/[^/]+/, '~');
+}
+
 export async function buildGlobalTree(): Promise<Root> {
   const [claudeMd, plans, skills, plugins, groups] = await Promise.all([
     getGlobalClaudeMd(),

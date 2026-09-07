@@ -19,28 +19,39 @@ export default async function Page() {
         <h2>Instructions</h2>
         {claudeMd !== null ? (
           <p>
-            <Link href="/global/claude-md">CLAUDE.md</Link> — global instructions applied to every project.
+            <Link href="/global/claude-md">CLAUDE.md</Link> applies to every project.
           </p>
         ) : (
-          <p>No ~/.claude/CLAUDE.md found.</p>
+          <p className="text-fd-muted-foreground">
+            No <code>~/.claude/CLAUDE.md</code> yet. Create one to give Claude instructions that apply
+            everywhere.
+          </p>
         )}
 
         <h2>
           Memories ({total} across {groups.length} projects)
         </h2>
         {groups.map((g) => (
-          <section key={g.slug}>
-            <h3>
-              <Link href={`/p/${g.slug}`}>{projectDisplayName(g.realPath, g.slug)}</Link>
+          <section key={g.slug} className="not-prose mb-10">
+            <h3 className="mb-2 text-sm">
+              <Link href={`/p/${g.slug}`} className="font-mono text-fd-foreground hover:underline">
+                {projectDisplayName(g.realPath, g.slug)}
+              </Link>
             </h3>
-            <ul>
+            <div className="geist-ledger">
               {g.memories.map((m) => (
-                <li key={m.file}>
-                  <Link href={`/p/${g.slug}/memory/${encodeURIComponent(m.file)}`}>{m.title}</Link>
-                  {m.description && <span className="text-fd-muted-foreground"> — {m.description}</span>}
-                </li>
+                <Link
+                  key={m.file}
+                  href={`/p/${g.slug}/memory/${encodeURIComponent(m.file)}`}
+                  className="geist-row grid-cols-1"
+                >
+                  <span className="text-sm font-medium">{m.title}</span>
+                  {m.description && (
+                    <span className="max-w-[68ch] text-sm text-fd-muted-foreground">{m.description}</span>
+                  )}
+                </Link>
               ))}
-            </ul>
+            </div>
           </section>
         ))}
       </DocsBody>

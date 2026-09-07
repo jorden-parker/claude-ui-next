@@ -86,7 +86,7 @@ export default async function Page() {
           <a href="/global/tools">Tools page</a>.
         </p>
 
-        <h2>Settings</h2>
+        <h2>Keys</h2>
         <SettingsForm rows={rows} groupOrder={GROUP_ORDER} action={updateSetting} />
 
         <h2>Environment variables</h2>
