@@ -17,6 +17,7 @@ before starting, honor its STOP conditions, and update your row when done.
 | 004  | Skills browser at /global/skills | P2 | M | — | TODO |
 | 005  | Prompt history at /global/history | P2 | M | — | TODO |
 | 006  | Transcript improvements (timestamps, user markdown, metadata header) | P2 | M | 001 (soft) | TODO |
+| 007  | Tool budget page at /global/tools (usage stats + per-tool switches + presets) | P2 | M | — | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale)
 
@@ -30,6 +31,13 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
   `if (settings !== null)` block in `buildGlobalTree()`, is on `main` now.
 - **006 depends on 001 softly**: user messages rendered as markdown (006) only get highlighted
   code blocks if 001 landed first. 006 still works without 001.
+- **007 is independent of 003–006.** It adds `app/global/tools/` and appends one line to
+  `buildGlobalTree()` after the existing `if (settings !== null)` block, so it only conflicts with
+  003/004/005 in that one function. If executing several, do 007 last to keep its excerpt accurate.
+- **007 is the first plan that writes to disk.** Everything before it is read-only. By the repo
+  owner's explicit instruction the write path is **ungated** — no env var, no read-only mode — so an
+  allowlist of permitted deny rules is the only boundary. Review `lib/claude/settings-writer.ts`
+  before anything else in that diff.
 - Sidebar entry order in `buildGlobalTree()` after all plans:
   Overview → CLAUDE.md → Settings (002) → History (005) → Plans (003) → Skills folder (004) →
   per-project memory separators. Each plan states its exact insertion anchor; 005 inserts
@@ -49,6 +57,23 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
   `project.replace(/[^a-zA-Z0-9]/g, '-')` and verify the directory exists before linking.
 - `history.jsonl` timestamps are epoch **milliseconds** (numbers), transcript entry timestamps are
   ISO 8601 **strings**. Don't mix them up.
+
+## Research notes for 007 (verified 2026-09-07, so nobody re-derives them)
+
+- There is **no** `disabledTools` / `allowedTools` key in `settings.json`. The only supported way to
+  stop a tool's schema being sent to the model is a **bare-name deny rule**:
+  `{"permissions": {"deny": ["NotebookEdit"]}}`. Docs: *"A bare tool name like `Bash` removes the tool
+  from Claude's context entirely, so Claude never sees it."* A scoped rule like `Bash(rm *)` does
+  **not** save tokens — it only blocks calls.
+- Glob patterns are legal in the tool-name position of deny rules: `"mcp__*"` removes every MCP tool,
+  `"*"` removes every tool (never write that one).
+- `EndConversation` is exempt from deny rules while any other tool remains.
+- Deny rules union across settings scopes, and a user-scope deny cannot be overridden by a project.
+- Tool search (deferred tool loading) is controlled only by the `ENABLE_TOOL_SEARCH` env var
+  (`true` / `false` / `auto` / `auto:N`), is on by default, and already saves tokens — 007 does not
+  touch it.
+- Savings are measured by running `/context` inside Claude Code before and after. No programmatic
+  token count is available to this app, so 007 shows usage counts only, never estimated tokens.
 
 ## Findings considered and rejected
 
