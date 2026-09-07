@@ -540,6 +540,110 @@ export async function readTranscript(slug: string, id: string): Promise<Transcri
   return parseTranscript(raw);
 }
 
+export interface SubagentSummary {
+  agentId: string;
+  agentType: string | null;
+  description: string | null;
+  /** `id` of the parent's `Agent` tool_use block, or null if the sidecar .meta.json is missing. */
+  toolUseId: string | null;
+  mtime: Date;
+  size: number;
+}
+
+const AGENT_ID = /^[0-9a-f]{8,32}$/;
+const OUTPUT_FILE = /^[A-Za-z0-9_-]+\.txt$/;
+
+function sessionSidecarDir(slug: string, id: string): string | null {
+  if (!/^[\w-]+$/.test(id)) return null;
+  return path.join(projectDir(slug), id);
+}
+
+/** Subagent transcripts recorded under <session>/subagents, newest first. */
+export async function listSubagents(slug: string, id: string): Promise<SubagentSummary[]> {
+  const dir = sessionSidecarDir(slug, id);
+  if (dir === null) return [];
+  let entries;
+  try {
+    entries = await fs.readdir(path.join(dir, 'subagents'));
+  } catch {
+    return [];
+  }
+  const out = await Promise.all(
+    entries
+      .filter((f) => /^agent-[0-9a-f]+\.jsonl$/.test(f))
+      .map(async (f) => {
+        const agentId = f.slice('agent-'.length, -'.jsonl'.length);
+        const full = path.join(dir, 'subagents', f);
+        let stat;
+        try {
+          stat = await fs.stat(full);
+        } catch {
+          return null;
+        }
+        let meta: Record<string, unknown> = {};
+        try {
+          meta = JSON.parse(await fs.readFile(full.replace(/\.jsonl$/, '.meta.json'), 'utf8'));
+        } catch {
+          // sidecar missing or invalid — fields stay null
+        }
+        const str = (v: unknown) => (typeof v === 'string' ? v : null);
+        return {
+          agentId,
+          agentType: str(meta.agentType),
+          description: str(meta.description),
+          toolUseId: str(meta.toolUseId),
+          mtime: stat.mtime,
+          size: stat.size,
+        };
+      }),
+  );
+  return out
+    .filter((s): s is SubagentSummary => s !== null)
+    .sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+}
+
+export async function readSubagentTranscript(
+  slug: string,
+  id: string,
+  agentId: string,
+): Promise<Transcript | null> {
+  const dir = sessionSidecarDir(slug, id);
+  if (dir === null || !AGENT_ID.test(agentId)) return null;
+  let raw;
+  try {
+    raw = await fs.readFile(path.join(dir, 'subagents', `agent-${agentId}.jsonl`), 'utf8');
+  } catch {
+    return null;
+  }
+  return parseTranscript(raw);
+}
+
+const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
+
+/** A spilled tool output from <session>/tool-results, clamped to 2 MB. */
+export async function getPersistedOutput(
+  slug: string,
+  id: string,
+  file: string,
+): Promise<{ text: string; size: number; truncated: boolean } | null> {
+  const dir = sessionSidecarDir(slug, id);
+  if (dir === null || !OUTPUT_FILE.test(file)) return null;
+  try {
+    const full = path.join(dir, 'tool-results', file);
+    const stat = await fs.stat(full);
+    const fd = await fs.open(full);
+    try {
+      const buf = Buffer.alloc(Math.min(stat.size, MAX_OUTPUT_BYTES));
+      const { bytesRead } = await fd.read(buf, 0, buf.length, 0);
+      return { text: buf.toString('utf8', 0, bytesRead), size: stat.size, truncated: stat.size > MAX_OUTPUT_BYTES };
+    } finally {
+      await fd.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
 /** All markdown plans in ~/.claude/plans, newest first. */
 export async function listPlans(): Promise<PlanEntry[]> {
   let files;
