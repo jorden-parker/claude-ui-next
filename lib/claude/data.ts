@@ -72,6 +72,31 @@ export interface Plan extends PlanEntry {
   content: string;
 }
 
+export interface HookCommand {
+  event: string;
+  matcher: string | null;
+  type: string;
+  command: string;
+  timeout: number | null;
+}
+
+export interface PluginEntry {
+  /** `<name>@<marketplace>` as keyed in installed_plugins.json. */
+  key: string;
+  name: string;
+  marketplace: string;
+  marketplaceSource: string | null; // e.g. "github:anthropics/claude-plugins-official" or "directory:/Users/…"
+  version: string | null;
+  description: string | null;
+  installPath: string;
+  installedAt: string | null;
+  enabled: boolean | null; // null = not listed in settings.enabledPlugins
+  skillCount: number;
+  agentCount: number;
+  commandCount: number;
+  hooks: HookCommand[];
+}
+
 export interface SkillEntry {
   /** Route id: 'caveman' for user skills, 'plugin-name:skill' for plugin skills. */
   id: string;
@@ -127,6 +152,346 @@ export async function getSettings(): Promise<Record<string, unknown> | null> {
   } catch {
     return null;
   }
+}
+
+/** All markdown plans in ~/.claude/plans, newest first. */
+export async function listPlans(): Promise<PlanEntry[]> {
+  let files;
+  try {
+    files = await fs.readdir(PLANS_DIR);
+  } catch {
+    return [];
+  }
+  const plans = await Promise.all(
+    files
+      .filter((f) => f.endsWith('.md') && !f.startsWith('.'))
+      .map(async (file) => {
+        const full = path.join(PLANS_DIR, file);
+        const [stat, raw] = await Promise.all([fs.stat(full), fs.readFile(full, 'utf8')]);
+        const heading = raw.match(/^#\s+(.+)$/m);
+        return {
+          file,
+          title: heading ? heading[1].trim() : file.replace(/\.md$/, ''),
+          mtime: stat.mtime,
+          size: stat.size,
+        };
+      }),
+  );
+  return plans.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+}
+
+export async function getPlan(file: string): Promise<Plan | null> {
+  if (file.includes('/') || file.includes('\\') || file.startsWith('.') || !file.endsWith('.md')) return null;
+  let raw, stat;
+  try {
+    const full = path.join(PLANS_DIR, file);
+    [raw, stat] = await Promise.all([fs.readFile(full, 'utf8'), fs.stat(full)]);
+  } catch {
+    return null;
+  }
+  const heading = raw.match(/^#\s+(.+)$/m);
+  return {
+    file,
+    title: heading ? heading[1].trim() : file.replace(/\.md$/, ''),
+    mtime: stat.mtime,
+    size: stat.size,
+    content: raw,
+  };
+}
+
+function parseSkillFrontmatter(raw: string, fallbackName: string): { name: string; description: string | null } {
+  const { data } = matter(raw);
+  return {
+    name: typeof data.name === 'string' ? data.name : fallbackName,
+    description: typeof data.description === 'string' ? data.description.trim() : null,
+  };
+}
+
+/** Directories under root (recursing at most `depth` levels) that contain a SKILL.md. */
+async function findSkillDirs(root: string, depth: number): Promise<string[]> {
+  let entries;
+  try {
+    entries = await fs.readdir(root, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const results: string[] = [];
+  if (entries.some((e) => e.isFile() && e.name === 'SKILL.md')) results.push(root);
+  if (depth > 0) {
+    for (const e of entries) {
+      if (e.isDirectory() && !e.name.startsWith('.')) {
+        results.push(...(await findSkillDirs(path.join(root, e.name), depth - 1)));
+      }
+    }
+  }
+  return results;
+}
+
+interface InstalledRecord {
+  key: string;
+  installPath: string;
+  version: string | null;
+  installedAt: string | null;
+}
+
+/** Raw entries from installed_plugins.json (v2), one per plugin key. */
+async function readInstalledPlugins(): Promise<InstalledRecord[]> {
+  let raw;
+  try {
+    raw = await fs.readFile(path.join(CLAUDE_DIR, 'plugins', 'installed_plugins.json'), 'utf8');
+  } catch {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    const plugins = parsed?.plugins;
+    if (typeof plugins !== 'object' || plugins === null) return [];
+    const records: InstalledRecord[] = [];
+    for (const [key, installs] of Object.entries(plugins)) {
+      const first = Array.isArray(installs) ? installs[0] : undefined;
+      const installPath = first?.installPath;
+      if (typeof installPath === 'string') {
+        records.push({
+          key,
+          installPath,
+          version: typeof first?.version === 'string' ? first.version : null,
+          installedAt: typeof first?.installedAt === 'string' ? first.installedAt : null,
+        });
+      }
+    }
+    return records;
+  } catch {
+    return [];
+  }
+}
+
+/** Installed plugins as [pluginName, installPath] pairs from installed_plugins.json (v2). */
+async function installedPlugins(): Promise<[string, string][]> {
+  return (await readInstalledPlugins()).map((r) => [r.key.split('@')[0], r.installPath]);
+}
+
+function isPlainRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/** Flatten a Claude Code hooks map ({ Event: [{ matcher?, hooks: [{type, command, timeout?}] }] }). */
+export function flattenHooks(map: unknown): HookCommand[] {
+  if (!isPlainRecord(map)) return [];
+  const out: HookCommand[] = [];
+  for (const [event, groups] of Object.entries(map)) {
+    if (!Array.isArray(groups)) continue;
+    for (const g of groups) {
+      const matcher = typeof g?.matcher === 'string' ? g.matcher : null;
+      const hooks = Array.isArray(g?.hooks) ? g.hooks : [];
+      for (const h of hooks) {
+        if (typeof h?.command !== 'string') continue;
+        out.push({
+          event,
+          matcher,
+          type: typeof h.type === 'string' ? h.type : 'command',
+          command: h.command,
+          timeout: typeof h.timeout === 'number' ? h.timeout : null,
+        });
+      }
+    }
+  }
+  return out;
+}
+
+async function countMd(dir: string): Promise<number> {
+  try {
+    return (await fs.readdir(dir)).filter((f) => f.endsWith('.md')).length;
+  } catch {
+    return 0;
+  }
+}
+
+/** Marketplace name → human-readable source string. */
+async function readKnownMarketplaces(): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  try {
+    const parsed = JSON.parse(await fs.readFile(path.join(CLAUDE_DIR, 'plugins', 'known_marketplaces.json'), 'utf8'));
+    for (const [name, v] of Object.entries(parsed ?? {})) {
+      const src = (v as { source?: { source?: string; repo?: string; path?: string } })?.source;
+      if (!src?.source) continue;
+      out.set(name, `${src.source}:${src.repo ?? src.path ?? ''}`);
+    }
+  } catch {
+    // absent or invalid — return what we have
+  }
+  return out;
+}
+
+/** Installed plugins with manifest, hook, and enabled-state details, from installed_plugins.json. */
+export async function listPlugins(): Promise<PluginEntry[]> {
+  const [records, settings, marketplaces] = await Promise.all([
+    readInstalledPlugins(),
+    getSettings(),
+    readKnownMarketplaces(),
+  ]);
+  const enabledMap = isPlainRecord(settings?.enabledPlugins) ? (settings!.enabledPlugins as Record<string, unknown>) : {};
+  return Promise.all(
+    records.map(async (r) => {
+      const [name, marketplace = ''] = r.key.split('@');
+      let manifest: Record<string, unknown> = {};
+      try {
+        manifest = JSON.parse(await fs.readFile(path.join(r.installPath, '.claude-plugin', 'plugin.json'), 'utf8'));
+      } catch {
+        // no manifest — leave fields null/fallback
+      }
+      let hooksJson: unknown = null;
+      try {
+        hooksJson = JSON.parse(await fs.readFile(path.join(r.installPath, 'hooks', 'hooks.json'), 'utf8'));
+      } catch {
+        // no hooks.json — no hooks
+      }
+      const skillDirs = await findSkillDirs(path.join(r.installPath, 'skills'), 2);
+      const enabled = enabledMap[r.key];
+      return {
+        key: r.key,
+        name,
+        marketplace,
+        marketplaceSource: marketplaces.get(marketplace) ?? null,
+        version: typeof manifest.version === 'string' ? manifest.version : r.version,
+        description: typeof manifest.description === 'string' ? manifest.description : null,
+        installPath: r.installPath,
+        installedAt: r.installedAt,
+        enabled: typeof enabled === 'boolean' ? enabled : null,
+        skillCount: skillDirs.length,
+        agentCount: await countMd(path.join(r.installPath, 'agents')),
+        commandCount: await countMd(path.join(r.installPath, 'commands')),
+        hooks: flattenHooks((hooksJson as { hooks?: unknown } | null)?.hooks),
+      };
+    }),
+  );
+}
+
+/** Hooks configured directly in ~/.claude/settings.json. */
+export async function getUserHooks(): Promise<HookCommand[]> {
+  const settings = await getSettings();
+  return flattenHooks(settings?.hooks);
+}
+
+/** User skills from ~/.claude/skills plus skills of installed plugins. */
+export async function listSkills(): Promise<SkillEntry[]> {
+  const skills: SkillEntry[] = [];
+
+  const userDirs = await findSkillDirs(SKILLS_DIR, 1);
+  for (const dir of userDirs) {
+    if (dir === SKILLS_DIR) continue;
+    try {
+      const raw = await fs.readFile(path.join(dir, 'SKILL.md'), 'utf8');
+      const base = path.basename(dir);
+      const fm = parseSkillFrontmatter(raw, base);
+      skills.push({ id: base, name: fm.name, source: 'user', description: fm.description });
+    } catch {
+      // unreadable skill — skip
+    }
+  }
+
+  for (const [plugin, installPath] of await installedPlugins()) {
+    const dirs = await findSkillDirs(path.join(installPath, 'skills'), 2);
+    for (const dir of dirs) {
+      try {
+        const raw = await fs.readFile(path.join(dir, 'SKILL.md'), 'utf8');
+        const base = path.basename(dir);
+        const fm = parseSkillFrontmatter(raw, base);
+        skills.push({ id: `${plugin}:${base}`, name: fm.name, source: plugin, description: fm.description });
+      } catch {
+        // skip
+      }
+    }
+  }
+
+  return skills.sort((a, b) => Number(a.source !== 'user') - Number(b.source !== 'user') || a.id.localeCompare(b.id));
+}
+
+export async function getSkill(id: string): Promise<Skill | null> {
+  if (!/^[A-Za-z0-9_-]+(:[A-Za-z0-9_-]+)?$/.test(id)) return null;
+  const [first, second] = id.split(':');
+
+  let dir: string | null = null;
+  if (second === undefined) {
+    dir = path.join(SKILLS_DIR, first);
+  } else {
+    const plugin = (await installedPlugins()).find(([name]) => name === first);
+    if (plugin) {
+      const dirs = await findSkillDirs(path.join(plugin[1], 'skills'), 2);
+      dir = dirs.find((d) => path.basename(d) === second) ?? null;
+    }
+  }
+  if (dir === null) return null;
+
+  let raw, entries;
+  try {
+    [raw, entries] = await Promise.all([
+      fs.readFile(path.join(dir, 'SKILL.md'), 'utf8'),
+      fs.readdir(dir),
+    ]);
+  } catch {
+    return null;
+  }
+  const fm = parseSkillFrontmatter(raw, path.basename(dir));
+  const { content } = matter(raw);
+  return {
+    id,
+    name: fm.name,
+    source: second === undefined ? 'user' : first,
+    description: fm.description,
+    content,
+    files: entries.filter((f) => f !== 'SKILL.md').sort(),
+  };
+}
+
+/** All prompts from ~/.claude/history.jsonl, newest first. */
+export async function getHistory(): Promise<HistoryEntry[]> {
+  let raw;
+  try {
+    raw = await fs.readFile(path.join(CLAUDE_DIR, 'history.jsonl'), 'utf8');
+  } catch {
+    return [];
+  }
+  let projectDirs: Set<string>;
+  try {
+    projectDirs = new Set(await fs.readdir(PROJECTS_DIR));
+  } catch {
+    projectDirs = new Set();
+  }
+
+  // One readdir per referenced project, cached — not one stat per history line.
+  const sessionCache = new Map<string, Set<string>>();
+  async function sessionIds(slug: string): Promise<Set<string>> {
+    let ids = sessionCache.get(slug);
+    if (!ids) {
+      try {
+        const files = await fs.readdir(path.join(PROJECTS_DIR, slug));
+        ids = new Set(files.filter((f) => f.endsWith('.jsonl')).map((f) => f.replace(/\.jsonl$/, '')));
+      } catch {
+        ids = new Set();
+      }
+      sessionCache.set(slug, ids);
+    }
+    return ids;
+  }
+
+  const entries: HistoryEntry[] = [];
+  for (const line of raw.split('\n')) {
+    if (line.trim() === '') continue;
+    let parsed;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (typeof parsed?.display !== 'string' || typeof parsed?.timestamp !== 'number') continue;
+    const project = typeof parsed.project === 'string' ? parsed.project : '';
+    const candidate = project.replace(/[^a-zA-Z0-9]/g, '-');
+    const slug = projectDirs.has(candidate) ? candidate : null;
+    const sessionId = typeof parsed.sessionId === 'string' ? parsed.sessionId : null;
+    const hasSession = slug !== null && sessionId !== null && (await sessionIds(slug)).has(sessionId);
+    entries.push({ display: parsed.display, project, slug, sessionId, hasSession, timestamp: parsed.timestamp });
+  }
+  return entries.sort((a, b) => b.timestamp - a.timestamp);
 }
 
 /** Memories from every project that has any, newest project first. */
@@ -458,224 +823,6 @@ export async function readTranscript(slug: string, id: string): Promise<Transcri
   }
 
   return { blocks, meta, totalLines: lines.length, skippedLines, truncated };
-}
-
-/** All markdown plans in ~/.claude/plans, newest first. */
-export async function listPlans(): Promise<PlanEntry[]> {
-  let files;
-  try {
-    files = await fs.readdir(PLANS_DIR);
-  } catch {
-    return [];
-  }
-  const plans = await Promise.all(
-    files
-      .filter((f) => f.endsWith('.md') && !f.startsWith('.'))
-      .map(async (file) => {
-        const full = path.join(PLANS_DIR, file);
-        const [stat, raw] = await Promise.all([fs.stat(full), fs.readFile(full, 'utf8')]);
-        const heading = raw.match(/^#\s+(.+)$/m);
-        return {
-          file,
-          title: heading ? heading[1].trim() : file.replace(/\.md$/, ''),
-          mtime: stat.mtime,
-          size: stat.size,
-        };
-      }),
-  );
-  return plans.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
-}
-
-export async function getPlan(file: string): Promise<Plan | null> {
-  if (file.includes('/') || file.includes('\\') || file.startsWith('.') || !file.endsWith('.md')) return null;
-  let raw, stat;
-  try {
-    const full = path.join(PLANS_DIR, file);
-    [raw, stat] = await Promise.all([fs.readFile(full, 'utf8'), fs.stat(full)]);
-  } catch {
-    return null;
-  }
-  const heading = raw.match(/^#\s+(.+)$/m);
-  return {
-    file,
-    title: heading ? heading[1].trim() : file.replace(/\.md$/, ''),
-    mtime: stat.mtime,
-    size: stat.size,
-    content: raw,
-  };
-}
-
-function parseSkillFrontmatter(raw: string, fallbackName: string): { name: string; description: string | null } {
-  const { data } = matter(raw);
-  return {
-    name: typeof data.name === 'string' ? data.name : fallbackName,
-    description: typeof data.description === 'string' ? data.description.trim() : null,
-  };
-}
-
-/** Directories under root (recursing at most `depth` levels) that contain a SKILL.md. */
-async function findSkillDirs(root: string, depth: number): Promise<string[]> {
-  let entries;
-  try {
-    entries = await fs.readdir(root, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  const results: string[] = [];
-  if (entries.some((e) => e.isFile() && e.name === 'SKILL.md')) results.push(root);
-  if (depth > 0) {
-    for (const e of entries) {
-      if (e.isDirectory() && !e.name.startsWith('.')) {
-        results.push(...(await findSkillDirs(path.join(root, e.name), depth - 1)));
-      }
-    }
-  }
-  return results;
-}
-
-/** Installed plugins as [pluginName, installPath] pairs from installed_plugins.json (v2). */
-async function installedPlugins(): Promise<[string, string][]> {
-  let raw;
-  try {
-    raw = await fs.readFile(path.join(CLAUDE_DIR, 'plugins', 'installed_plugins.json'), 'utf8');
-  } catch {
-    return [];
-  }
-  try {
-    const parsed = JSON.parse(raw);
-    const plugins = parsed?.plugins;
-    if (typeof plugins !== 'object' || plugins === null) return [];
-    const pairs: [string, string][] = [];
-    for (const [key, installs] of Object.entries(plugins)) {
-      const installPath = Array.isArray(installs) ? installs[0]?.installPath : undefined;
-      if (typeof installPath === 'string') pairs.push([key.split('@')[0], installPath]);
-    }
-    return pairs;
-  } catch {
-    return [];
-  }
-}
-
-/** User skills from ~/.claude/skills plus skills of installed plugins. */
-export async function listSkills(): Promise<SkillEntry[]> {
-  const skills: SkillEntry[] = [];
-
-  const userDirs = await findSkillDirs(SKILLS_DIR, 1);
-  for (const dir of userDirs) {
-    if (dir === SKILLS_DIR) continue;
-    try {
-      const raw = await fs.readFile(path.join(dir, 'SKILL.md'), 'utf8');
-      const base = path.basename(dir);
-      const fm = parseSkillFrontmatter(raw, base);
-      skills.push({ id: base, name: fm.name, source: 'user', description: fm.description });
-    } catch {
-      // unreadable skill — skip
-    }
-  }
-
-  for (const [plugin, installPath] of await installedPlugins()) {
-    const dirs = await findSkillDirs(path.join(installPath, 'skills'), 2);
-    for (const dir of dirs) {
-      try {
-        const raw = await fs.readFile(path.join(dir, 'SKILL.md'), 'utf8');
-        const base = path.basename(dir);
-        const fm = parseSkillFrontmatter(raw, base);
-        skills.push({ id: `${plugin}:${base}`, name: fm.name, source: plugin, description: fm.description });
-      } catch {
-        // skip
-      }
-    }
-  }
-
-  return skills.sort((a, b) => Number(a.source !== 'user') - Number(b.source !== 'user') || a.id.localeCompare(b.id));
-}
-
-export async function getSkill(id: string): Promise<Skill | null> {
-  if (!/^[A-Za-z0-9_-]+(:[A-Za-z0-9_-]+)?$/.test(id)) return null;
-  const [first, second] = id.split(':');
-
-  let dir: string | null = null;
-  if (second === undefined) {
-    dir = path.join(SKILLS_DIR, first);
-  } else {
-    const plugin = (await installedPlugins()).find(([name]) => name === first);
-    if (plugin) {
-      const dirs = await findSkillDirs(path.join(plugin[1], 'skills'), 2);
-      dir = dirs.find((d) => path.basename(d) === second) ?? null;
-    }
-  }
-  if (dir === null) return null;
-
-  let raw, entries;
-  try {
-    [raw, entries] = await Promise.all([
-      fs.readFile(path.join(dir, 'SKILL.md'), 'utf8'),
-      fs.readdir(dir),
-    ]);
-  } catch {
-    return null;
-  }
-  const fm = parseSkillFrontmatter(raw, path.basename(dir));
-  const { content } = matter(raw);
-  return {
-    id,
-    name: fm.name,
-    source: second === undefined ? 'user' : first,
-    description: fm.description,
-    content,
-    files: entries.filter((f) => f !== 'SKILL.md').sort(),
-  };
-}
-
-/** All prompts from ~/.claude/history.jsonl, newest first. */
-export async function getHistory(): Promise<HistoryEntry[]> {
-  let raw;
-  try {
-    raw = await fs.readFile(path.join(CLAUDE_DIR, 'history.jsonl'), 'utf8');
-  } catch {
-    return [];
-  }
-  let projectDirs: Set<string>;
-  try {
-    projectDirs = new Set(await fs.readdir(PROJECTS_DIR));
-  } catch {
-    projectDirs = new Set();
-  }
-
-  // One readdir per referenced project, cached — not one stat per history line.
-  const sessionCache = new Map<string, Set<string>>();
-  async function sessionIds(slug: string): Promise<Set<string>> {
-    let ids = sessionCache.get(slug);
-    if (!ids) {
-      try {
-        const files = await fs.readdir(path.join(PROJECTS_DIR, slug));
-        ids = new Set(files.filter((f) => f.endsWith('.jsonl')).map((f) => f.replace(/\.jsonl$/, '')));
-      } catch {
-        ids = new Set();
-      }
-      sessionCache.set(slug, ids);
-    }
-    return ids;
-  }
-
-  const entries: HistoryEntry[] = [];
-  for (const line of raw.split('\n')) {
-    if (line.trim() === '') continue;
-    let parsed;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (typeof parsed?.display !== 'string' || typeof parsed?.timestamp !== 'number') continue;
-    const project = typeof parsed.project === 'string' ? parsed.project : '';
-    const candidate = project.replace(/[^a-zA-Z0-9]/g, '-');
-    const slug = projectDirs.has(candidate) ? candidate : null;
-    const sessionId = typeof parsed.sessionId === 'string' ? parsed.sessionId : null;
-    const hasSession = slug !== null && sessionId !== null && (await sessionIds(slug)).has(sessionId);
-    entries.push({ display: parsed.display, project, slug, sessionId, hasSession, timestamp: parsed.timestamp });
-  }
-  return entries.sort((a, b) => b.timestamp - a.timestamp);
 }
 
 export interface ToolUsage {
