@@ -677,3 +677,95 @@ export async function getHistory(): Promise<HistoryEntry[]> {
   }
   return entries.sort((a, b) => b.timestamp - a.timestamp);
 }
+
+export interface ToolUsage {
+  name: string;
+  count: number;
+  /** ISO timestamp of the most recent call, or null if none had a usable timestamp. */
+  lastUsed: string | null;
+}
+
+const toolUsageCache = new Map<
+  string,
+  { mtimeMs: number; counts: Map<string, number>; lastUsed: Map<string, string> }
+>();
+
+function scanToolUses(raw: string): { counts: Map<string, number>; lastUsed: Map<string, string> } {
+  const counts = new Map<string, number>();
+  const lastUsed = new Map<string, string>();
+  for (const line of raw.split('\n')) {
+    // Cheap pre-filter: only a fraction of transcript lines carry tool calls.
+    if (!line.includes('"tool_use"')) continue;
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const content = entry?.message?.content;
+    if (!Array.isArray(content)) continue;
+    for (const item of content) {
+      if (item?.type !== 'tool_use' || typeof item.name !== 'string') continue;
+      counts.set(item.name, (counts.get(item.name) ?? 0) + 1);
+      // ISO 8601 sorts chronologically as a string.
+      if (typeof entry.timestamp === 'string') {
+        const seen = lastUsed.get(item.name);
+        if (seen === undefined || entry.timestamp > seen) lastUsed.set(item.name, entry.timestamp);
+      }
+    }
+  }
+  return { counts, lastUsed };
+}
+
+/** Tool-call counts across every session transcript in ~/.claude/projects, most-used first. */
+export async function listToolUsage(): Promise<ToolUsage[]> {
+  let entries;
+  try {
+    entries = await fs.readdir(PROJECTS_DIR, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const totals = new Map<string, number>();
+  const latest = new Map<string, string>();
+
+  for (const dir of entries) {
+    if (!dir.isDirectory()) continue;
+    for (const f of await sessionFiles(dir.name)) {
+      const full = path.join(projectDir(dir.name), f.name);
+      let cached = toolUsageCache.get(full);
+      if (!cached || cached.mtimeMs !== f.mtime.getTime()) {
+        let raw;
+        try {
+          raw = await fs.readFile(full, 'utf8');
+        } catch {
+          continue;
+        }
+        const scanned = scanToolUses(raw);
+        cached = { mtimeMs: f.mtime.getTime(), ...scanned };
+        toolUsageCache.set(full, cached);
+      }
+      for (const [name, n] of cached.counts) totals.set(name, (totals.get(name) ?? 0) + n);
+      for (const [name, ts] of cached.lastUsed) {
+        const seen = latest.get(name);
+        if (seen === undefined || ts > seen) latest.set(name, ts);
+      }
+    }
+  }
+
+  return [...totals.entries()]
+    .map(([name, count]) => ({ name, count, lastUsed: latest.get(name) ?? null }))
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+}
+
+/** Bare-name deny rules currently in ~/.claude/settings.json permissions.deny. */
+export async function getDeniedTools(): Promise<string[]> {
+  const settings = await getSettings();
+  if (settings === null) return [];
+  const permissions = settings.permissions;
+  if (typeof permissions !== 'object' || permissions === null || Array.isArray(permissions)) return [];
+  const deny = (permissions as Record<string, unknown>).deny;
+  if (!Array.isArray(deny)) return [];
+  // A scoped rule like `Bash(rm *)` blocks calls but does not remove the tool.
+  return deny.filter((r): r is string => typeof r === 'string' && !r.includes('('));
+}
