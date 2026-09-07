@@ -387,14 +387,8 @@ async function readFirstPrompt(slug: string, file: string): Promise<string | nul
   return null;
 }
 
-export async function readTranscript(slug: string, id: string): Promise<Transcript | null> {
-  if (!/^[\w-]+$/.test(id)) return null;
-  let raw;
-  try {
-    raw = await fs.readFile(path.join(projectDir(slug), `${id}.jsonl`), 'utf8');
-  } catch {
-    return null;
-  }
+/** Parse transcript JSONL text. Pure: no I/O. Used for sessions and subagent sidecars alike. */
+export function parseTranscript(raw: string): Transcript {
   const lines = raw.split('\n').filter((l) => l.trim() !== '');
   const blocks: TranscriptBlock[] = [];
   const meta: SessionMetadata = {
@@ -516,6 +510,17 @@ export async function readTranscript(slug: string, id: string): Promise<Transcri
   }
 
   return { blocks, meta, totalLines: lines.length, skippedLines, truncated };
+}
+
+export async function readTranscript(slug: string, id: string): Promise<Transcript | null> {
+  if (!/^[\w-]+$/.test(id)) return null;
+  let raw;
+  try {
+    raw = await fs.readFile(path.join(projectDir(slug), `${id}.jsonl`), 'utf8');
+  } catch {
+    return null;
+  }
+  return parseTranscript(raw);
 }
 
 /** All markdown plans in ~/.claude/plans, newest first. */
