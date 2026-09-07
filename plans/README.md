@@ -13,7 +13,7 @@ before starting, honor its STOP conditions, and update your row when done.
 |------|-------|----------|--------|------------|--------|
 | 001  | Syntax highlighting in the Markdown component | P1 | S | — | DONE (commit `2fabb5a`, now on `main`) |
 | 002  | Settings viewer at /global/settings | P2 | S | — | DONE — reviewed & APPROVED, commit `a48362f`, merged to `main` (fast-forward, not pushed) |
-| 003  | Plans browser at /global/plans | P2 | M | — | TODO |
+| 003  | Plans browser at /global/plans | P2 | M | — | DONE |
 | 004  | Skills browser at /global/skills | P2 | M | — | TODO |
 | 005  | Prompt history at /global/history | P2 | M | — | TODO |
 | 006  | Transcript improvements (timestamps, user markdown, metadata header) | P2 | M | 001 (soft) | TODO |

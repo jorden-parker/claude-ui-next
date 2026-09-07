@@ -1,5 +1,5 @@
 import type { Root, Node } from 'fumadocs-core/page-tree';
-import { getGlobalClaudeMd, getSettings, listAllMemories, listMemories, listSessions } from './data';
+import { getGlobalClaudeMd, getSettings, listAllMemories, listMemories, listPlans, listSessions } from './data';
 
 const SIDEBAR_SESSION_LIMIT = 40;
 
@@ -17,9 +17,10 @@ export function projectDisplayName(realPath: string | null, slug: string): strin
 }
 
 export async function buildGlobalTree(): Promise<Root> {
-  const [claudeMd, settings, groups] = await Promise.all([
+  const [claudeMd, settings, plans, groups] = await Promise.all([
     getGlobalClaudeMd(),
     getSettings(),
+    listPlans(),
     listAllMemories(),
   ]);
 
@@ -29,6 +30,9 @@ export async function buildGlobalTree(): Promise<Root> {
   }
   if (settings !== null) {
     children.push({ type: 'page', name: 'Settings', url: '/global/settings' });
+  }
+  if (plans.length > 0) {
+    children.push({ type: 'page', name: `Plans (${plans.length})`, url: '/global/plans' });
   }
   for (const g of groups) {
     children.push({ type: 'separator', name: projectDisplayName(g.realPath, g.slug) });

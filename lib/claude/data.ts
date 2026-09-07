@@ -5,6 +5,7 @@ import matter from 'gray-matter';
 
 const CLAUDE_DIR = process.env.CLAUDE_DIR ?? path.join(os.homedir(), '.claude');
 const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
+const PLANS_DIR = path.join(CLAUDE_DIR, 'plans');
 
 export interface ProjectSummary {
   slug: string;
@@ -44,6 +45,17 @@ export interface Transcript {
   totalLines: number;
   skippedLines: number;
   truncated: boolean;
+}
+
+export interface PlanEntry {
+  file: string;
+  title: string;
+  mtime: Date;
+  size: number;
+}
+
+export interface Plan extends PlanEntry {
+  content: string;
 }
 
 export interface ProjectMemories {
@@ -355,4 +367,49 @@ export async function readTranscript(slug: string, id: string): Promise<Transcri
   }
 
   return { blocks, totalLines: lines.length, skippedLines, truncated };
+}
+
+/** All markdown plans in ~/.claude/plans, newest first. */
+export async function listPlans(): Promise<PlanEntry[]> {
+  let files;
+  try {
+    files = await fs.readdir(PLANS_DIR);
+  } catch {
+    return [];
+  }
+  const plans = await Promise.all(
+    files
+      .filter((f) => f.endsWith('.md') && !f.startsWith('.'))
+      .map(async (file) => {
+        const full = path.join(PLANS_DIR, file);
+        const [stat, raw] = await Promise.all([fs.stat(full), fs.readFile(full, 'utf8')]);
+        const heading = raw.match(/^#\s+(.+)$/m);
+        return {
+          file,
+          title: heading ? heading[1].trim() : file.replace(/\.md$/, ''),
+          mtime: stat.mtime,
+          size: stat.size,
+        };
+      }),
+  );
+  return plans.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+}
+
+export async function getPlan(file: string): Promise<Plan | null> {
+  if (file.includes('/') || file.includes('\\') || file.startsWith('.') || !file.endsWith('.md')) return null;
+  let raw, stat;
+  try {
+    const full = path.join(PLANS_DIR, file);
+    [raw, stat] = await Promise.all([fs.readFile(full, 'utf8'), fs.stat(full)]);
+  } catch {
+    return null;
+  }
+  const heading = raw.match(/^#\s+(.+)$/m);
+  return {
+    file,
+    title: heading ? heading[1].trim() : file.replace(/\.md$/, ''),
+    mtime: stat.mtime,
+    size: stat.size,
+    content: raw,
+  };
 }
