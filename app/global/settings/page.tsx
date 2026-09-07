@@ -72,17 +72,16 @@ export default async function Page() {
   }
 
   return (
-    <DocsPage>
+    <DocsPage full>
       <DocsTitle>Settings</DocsTitle>
       <DocsDescription className="mb-0 font-mono text-xs">~/.claude/settings.json</DocsDescription>
       <DocsBody>
         <p className="text-sm text-fd-muted-foreground">
-          Writes directly to <code className="font-mono">~/.claude/settings.json</code>, backing up the
-          previous version to <code className="font-mono">settings.ui-backup.json</code> first. Claude
-          Code hot-reloads this file for almost every key — exceptions are{' '}
-          <code className="font-mono">outputStyle</code>, the <code className="font-mono">forceLogin*</code>{' '}
-          keys, and <code className="font-mono">autoUpdatesChannel</code> (take effect next start), and{' '}
-          <code className="font-mono">model</code> (next session). Deny rules live on the{' '}
+          Every edit writes this file and backs up the previous version to{' '}
+          <code className="font-mono">settings.ui-backup.json</code>. Most keys hot-reload;{' '}
+          <code className="font-mono">outputStyle</code>, <code className="font-mono">forceLogin*</code>{' '}
+          and <code className="font-mono">autoUpdatesChannel</code> take effect at next start,{' '}
+          <code className="font-mono">model</code> at next session. Deny rules live on the{' '}
           <a href="/global/tools">Tools page</a>.
         </p>
 
@@ -91,8 +90,7 @@ export default async function Page() {
 
         <h2>Environment variables</h2>
         <p className="text-sm text-fd-muted-foreground">
-          These go into the <code className="font-mono">env</code> object and apply to every Claude Code
-          session that reads this file.
+          The <code className="font-mono">env</code> object, applied to every session that reads this file.
         </p>
         {envWarning && (
           <p className="text-sm text-fd-muted-foreground">
@@ -102,11 +100,12 @@ export default async function Page() {
         <EnvForm rows={envRows} specs={listEnvSpecs()} action={updateSetting} />
 
         <h2>Raw file</h2>
-        <details>
-          <summary className="cursor-pointer text-sm font-medium">
-            ~/.claude/settings.json (secrets redacted)
+        <details className="not-prose">
+          <summary className="cursor-pointer list-none border-b border-fd-border py-3 text-sm font-medium [&::-webkit-details-marker]:hidden">
+            <span aria-hidden className="mr-3 font-mono text-xs text-fd-muted-foreground">+</span>
+            Show JSON, secrets redacted
           </summary>
-          <pre className="overflow-x-auto rounded bg-fd-secondary p-2 text-xs">
+          <pre className="mt-3 overflow-x-auto rounded-md border border-fd-border bg-fd-muted p-3 text-xs">
             {JSON.stringify(redacted, null, 2)}
           </pre>
         </details>

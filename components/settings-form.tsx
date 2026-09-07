@@ -3,6 +3,31 @@
 import { useState, useTransition } from 'react';
 import type { Field, EnvSpec } from '@/lib/claude/settings-schema';
 import type { SetResult } from '@/lib/claude/settings-writer';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
+import { Textarea } from '@/components/ui/textarea';
+import {
+  Description,
+  ErrorNote,
+  GroupPanel,
+  Ledger,
+  Row,
+  SetDot,
+  Tally,
+  Toolbar,
+  summarize,
+} from '@/components/settings-shell';
 
 export interface FieldRow extends Field {
   value: unknown;
@@ -23,6 +48,11 @@ export interface EnvRow {
 
 type Update = (path: string[], value: unknown) => Promise<SetResult>;
 
+/** Sentinel item values. A Base UI select stores real values, so "leave this key out
+ * of the file" needs a value of its own rather than an empty string. */
+const UNSET = '__unset__';
+const CUSTOM = '__custom__';
+
 const CONFIRM_MESSAGE = (key: string, value: unknown) =>
   `Write ${key} = ${JSON.stringify(value)}? Claude Code reads this file for every session.`;
 
@@ -34,235 +64,180 @@ function needsConfirm(key: string, value: unknown, isClear: boolean, kind: strin
   return false;
 }
 
-function ErrorBox({ result }: { result: SetResult | null }) {
-  if (result === null || result.ok) return null;
-  return (
-    <p className="rounded border border-fd-primary/50 bg-fd-card px-3 py-2 text-sm text-fd-foreground">
-      {result.error}
-    </p>
-  );
+/** What the closed dropdown reads when the key is absent from the file: the value
+ * Claude Code will actually use, not a bare "default". */
+function unsetLabel(def: unknown): string {
+  return def === undefined ? 'Not set' : `Default — ${String(def)}`;
 }
 
-function Switch({
-  on,
-  disabled,
-  label,
-  onClick,
-}: {
-  on: boolean;
-  disabled?: boolean;
-  label: string;
-  onClick: () => void;
-}) {
+function KeyName({ label, isSet }: { label: string; isSet: boolean }) {
   return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={on}
-      aria-label={label}
-      disabled={disabled}
-      onClick={onClick}
-      className="flex shrink-0 items-center gap-2 rounded border px-2 py-0.5 text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-fd-primary disabled:opacity-50"
-    >
-      <span
-        aria-hidden
-        className={`h-2 w-2 rounded-full ${on ? 'bg-fd-primary' : 'bg-fd-muted-foreground'}`}
-      />
-      <span className="w-8 text-left font-mono">{on ? 'on' : 'off'}</span>
-    </button>
-  );
-}
-
-function Badges({ row }: { row: FieldRow }) {
-  return (
-    <span className="flex shrink-0 gap-1">
-      {!row.isSet && (
-        <span className="rounded-full border px-1.5 py-0 text-[10px] text-fd-muted-foreground">default</span>
-      )}
-      {row.managedOnly && (
-        <span className="rounded-full border px-1.5 py-0 text-[10px] text-fd-muted-foreground">managed-only</span>
-      )}
-      {row.deprecated && (
-        <span className="rounded-full border border-fd-primary/50 px-1.5 py-0 text-[10px] text-fd-primary">
-          deprecated
-        </span>
-      )}
+    <span className="font-mono text-xs">
+      <SetDot set={isSet} />
+      {label}
     </span>
   );
 }
 
-function Description({ row }: { row: Pick<FieldRow, 'description' | 'docsUrl'> }) {
-  if (!row.description) return null;
+/** Only exceptions get a badge; "default" on nine rows in ten is noise. */
+function Flags({ row }: { row: FieldRow }) {
+  if (!row.managedOnly && !row.deprecated) return null;
   return (
-    <p className="text-xs text-fd-muted-foreground">
-      {row.description}
-      {row.docsUrl && (
-        <>
-          {' '}
-          <a href={row.docsUrl} target="_blank" rel="noreferrer" className="underline">
-            docs ↗
-          </a>
-        </>
-      )}
-    </p>
+    <span className="flex flex-wrap gap-1.5">
+      {row.managedOnly && <Badge variant="outline">managed only</Badge>}
+      {row.deprecated && <Badge variant="outline">deprecated</Badge>}
+    </span>
   );
 }
 
-/** Local draft state for text-ish inputs: keying each control by `${key}:${JSON.stringify(value)}`
- * makes React remount it (resetting any in-progress edit) whenever the server-confirmed value
- * changes underneath it, without a separate effect to reconcile drafts against fresh props. */
+/** Keying a control by `${key}:${JSON.stringify(value)}` remounts it — resetting any
+ * in-progress draft — whenever the server-confirmed value changes underneath it. The
+ * key belongs on the component element, not on the markup the component returns. */
 function draftKey(key: string, value: unknown): string {
   return `${key}:${JSON.stringify(value) ?? 'undefined'}`;
 }
 
-function FieldControl({
-  row,
-  busy,
-  onWrite,
-}: {
-  row: FieldRow;
-  busy: boolean;
-  onWrite: (value: unknown, opts?: { isClear?: boolean }) => void;
-}) {
-  const current = row.isSet ? row.value : row.default;
+type WriteFn = (value: unknown, opts?: { isClear?: boolean }) => void;
 
-  if (row.readOnly) {
-    return (
-      <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <pre className="overflow-x-auto rounded bg-fd-secondary p-2 text-xs">
-          {JSON.stringify(row.value, null, 2)}
-        </pre>
-        <p className="text-xs text-fd-muted-foreground">
-          {row.key === 'permissions.deny' ? (
-            <>
-              {row.readOnly}{' '}
-              <a href="/global/tools" className="underline">
-                Open the Tools page.
-              </a>
-            </>
-          ) : (
-            row.readOnly
-          )}
-        </p>
-      </div>
-    );
-  }
+function FieldControl({ row, busy, onWrite }: { row: FieldRow; busy: boolean; onWrite: WriteFn }) {
+  const current = row.isSet ? row.value : row.default;
+  const k = draftKey(row.key, row.value);
 
   switch (row.kind) {
     case 'boolean': {
       const on = row.isSet ? Boolean(row.value) : Boolean(row.default ?? false);
       return (
-        <Switch on={on} disabled={busy} label={row.key} onClick={() => onWrite(!on)} />
+        <Label className="w-fit gap-2.5">
+          <Switch
+            checked={on}
+            disabled={busy}
+            onCheckedChange={() => onWrite(!on)}
+            aria-label={row.key}
+          />
+          <span className="font-mono text-xs font-normal">{on ? 'on' : 'off'}</span>
+          {!row.isSet && <span className="text-xs font-normal text-muted-foreground">default</span>}
+        </Label>
       );
     }
-    case 'enum': {
-      return (
-        <select
-          disabled={busy}
-          value={row.isSet ? String(row.value) : ''}
-          onChange={(e) => {
-            if (e.target.value === '') onWrite(undefined, { isClear: true });
-            else onWrite(e.target.value);
-          }}
-          className="rounded border bg-fd-secondary px-2 py-1 text-sm"
-        >
-          <option value="">
-            — default{row.default !== undefined ? ` (${String(row.default)})` : ''} —
-          </option>
-          {(row.options ?? []).map((o) => (
-            <option key={o} value={o}>
-              {o}
-            </option>
-          ))}
-        </select>
-      );
-    }
-    case 'enumOrCustom': {
-      const isKnown = row.isSet && (row.options?.includes(String(row.value)) ?? false);
-      const initialCustom = row.isSet && !isKnown;
-      return (
-        <EnumOrCustomControl
-          key={draftKey(row.key, row.value)}
-          row={row}
-          busy={busy}
-          onWrite={onWrite}
-          initialCustom={initialCustom}
-        />
-      );
-    }
+    case 'enum':
+      return <EnumControl row={row} busy={busy} onWrite={onWrite} />;
+    case 'enumOrCustom':
+      return <EnumOrCustomControl key={k} row={row} busy={busy} onWrite={onWrite} />;
     case 'integer':
-    case 'number': {
-      return (
-        <NumberControl
-          row={row}
-          current={current}
-          busy={busy}
-          onWrite={onWrite}
-        />
-      );
-    }
-    case 'string': {
-      return <StringControl row={row} current={current} busy={busy} onWrite={onWrite} />;
-    }
-    case 'stringList': {
-      return <StringListControl row={row} busy={busy} onWrite={onWrite} />;
-    }
-    case 'enumList': {
+    case 'number':
+      return <NumberControl key={k} row={row} current={current} busy={busy} onWrite={onWrite} />;
+    case 'string':
+      return <StringControl key={k} current={current} busy={busy} onWrite={onWrite} />;
+    case 'stringList':
+      return <StringListControl key={k} row={row} busy={busy} onWrite={onWrite} />;
+    case 'enumList':
       return <EnumListControl row={row} busy={busy} onWrite={onWrite} />;
-    }
-    case 'json': {
-      return <JsonControl row={row} busy={busy} onWrite={onWrite} />;
-    }
+    case 'json':
+      return <JsonControl key={k} row={row} busy={busy} onWrite={onWrite} />;
     default:
       return null;
   }
+}
+
+function ValueSelect({
+  value,
+  onChange,
+  busy,
+  label,
+  items,
+  unsetText,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  busy: boolean;
+  label: string;
+  items: { value: string; label: string; mono?: boolean }[];
+  unsetText: string;
+}) {
+  return (
+    <Select value={value} onValueChange={(v) => onChange(String(v))} disabled={busy}>
+      <SelectTrigger aria-label={label} className="h-9 w-full max-w-sm">
+        <SelectValue>
+          {(v: string) =>
+            v === UNSET ? (
+              <span className="text-muted-foreground">{unsetText}</span>
+            ) : v === CUSTOM ? (
+              <span className="text-muted-foreground">Custom value…</span>
+            ) : (
+              <span className="font-mono text-xs">{String(v)}</span>
+            )
+          }
+        </SelectValue>
+      </SelectTrigger>
+      <SelectContent>
+        {items.map((item) => (
+          <SelectItem key={item.value} value={item.value}>
+            <span className={item.mono ? 'font-mono text-xs' : ''}>{item.label}</span>
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+function EnumControl({ row, busy, onWrite }: { row: FieldRow; busy: boolean; onWrite: WriteFn }) {
+  const unsetText = unsetLabel(row.default);
+  return (
+    <ValueSelect
+      busy={busy}
+      label={row.key}
+      unsetText={unsetText}
+      value={row.isSet ? String(row.value) : UNSET}
+      onChange={(v) => (v === UNSET ? onWrite(undefined, { isClear: true }) : onWrite(v))}
+      items={[
+        { value: UNSET, label: unsetText },
+        ...(row.options ?? []).map((o) => ({ value: o, label: o, mono: true })),
+      ]}
+    />
+  );
 }
 
 function EnumOrCustomControl({
   row,
   busy,
   onWrite,
-  initialCustom,
 }: {
   row: FieldRow;
   busy: boolean;
-  onWrite: (value: unknown, opts?: { isClear?: boolean }) => void;
-  initialCustom: boolean;
+  onWrite: WriteFn;
 }) {
-  const [showCustom, setShowCustom] = useState(initialCustom);
-  const [text, setText] = useState(row.isSet && initialCustom ? String(row.value) : '');
+  const isKnown = row.isSet && (row.options?.includes(String(row.value)) ?? false);
+  const [showCustom, setShowCustom] = useState(row.isSet && !isKnown);
+  const [text, setText] = useState(row.isSet && !isKnown ? String(row.value) : '');
+  const unsetText = unsetLabel(row.default);
+
   return (
-    <div className="flex flex-col gap-1">
-      <select
-        disabled={busy}
-        value={row.isSet && !showCustom ? String(row.value) : showCustom ? '__custom__' : ''}
-        onChange={(e) => {
-          if (e.target.value === '') {
+    <div className="flex max-w-sm flex-col gap-2">
+      <ValueSelect
+        busy={busy}
+        label={row.key}
+        unsetText={unsetText}
+        value={showCustom ? CUSTOM : row.isSet ? String(row.value) : UNSET}
+        onChange={(v) => {
+          if (v === CUSTOM) {
+            setShowCustom(true);
+          } else if (v === UNSET) {
             setShowCustom(false);
             onWrite(undefined, { isClear: true });
-          } else if (e.target.value === '__custom__') {
-            setShowCustom(true);
           } else {
             setShowCustom(false);
-            onWrite(e.target.value);
+            onWrite(v);
           }
         }}
-        className="rounded border bg-fd-secondary px-2 py-1 text-sm"
-      >
-        <option value="">
-          — default{row.default !== undefined ? ` (${String(row.default)})` : ''} —
-        </option>
-        {(row.options ?? []).map((o) => (
-          <option key={o} value={o}>
-            {o}
-          </option>
-        ))}
-        <option value="__custom__">custom…</option>
-      </select>
+        items={[
+          { value: UNSET, label: unsetText },
+          ...(row.options ?? []).map((o) => ({ value: o, label: o, mono: true })),
+          { value: CUSTOM, label: 'Custom value…' },
+        ]}
+      />
       {showCustom && (
-        <div className="flex gap-2">
-          <input
-            type="text"
+        <div className="flex items-center gap-2">
+          <Input
             value={text}
             disabled={busy}
             placeholder={row.customPattern ? `matches ${row.customPattern}` : 'custom value'}
@@ -270,16 +245,11 @@ function EnumOrCustomControl({
             onKeyDown={(e) => {
               if (e.key === 'Enter') onWrite(text);
             }}
-            className="min-w-0 flex-1 rounded border bg-fd-secondary px-2 py-1 text-sm"
+            className="h-9 font-mono"
           />
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => onWrite(text)}
-            className="shrink-0 rounded border px-2 py-1 text-xs disabled:opacity-50"
-          >
+          <Button variant="outline" size="sm" disabled={busy} onClick={() => onWrite(text)}>
             Save
-          </button>
+          </Button>
         </div>
       )}
     </div>
@@ -295,66 +265,67 @@ function NumberControl({
   row: FieldRow;
   current: unknown;
   busy: boolean;
-  onWrite: (value: unknown, opts?: { isClear?: boolean }) => void;
+  onWrite: WriteFn;
 }) {
   const initial = current === undefined || current === null ? '' : String(current);
   const [text, setText] = useState(initial);
+  const dirty = text !== initial;
   function save() {
-    if (text.trim() === '') {
-      onWrite(undefined, { isClear: true });
-      return;
-    }
-    onWrite(Number(text));
+    if (text.trim() === '') onWrite(undefined, { isClear: true });
+    else onWrite(Number(text));
   }
   return (
-    <div key={draftKey(row.key, row.value)} className="flex gap-2">
-      <input
+    <div className="flex items-center gap-2">
+      <Input
         type="number"
-        defaultValue={initial}
+        value={text}
         min={row.min}
         max={row.max}
         step={row.kind === 'integer' ? 1 : 'any'}
         disabled={busy}
         onChange={(e) => setText(e.target.value)}
-        className="w-32 rounded border bg-fd-secondary px-2 py-1 text-sm"
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && dirty) save();
+        }}
+        className="geist-numeric h-9 w-32"
       />
-      <button type="button" disabled={busy} onClick={save} className="rounded border px-2 py-1 text-xs disabled:opacity-50">
-        Save
-      </button>
+      {dirty && (
+        <Button variant="outline" size="sm" disabled={busy} onClick={save}>
+          Save
+        </Button>
+      )}
     </div>
   );
 }
 
 function StringControl({
-  row,
   current,
   busy,
   onWrite,
 }: {
-  row: FieldRow;
   current: unknown;
   busy: boolean;
-  onWrite: (value: unknown, opts?: { isClear?: boolean }) => void;
+  onWrite: WriteFn;
 }) {
   const initial = typeof current === 'string' ? current : '';
   const [text, setText] = useState(initial);
+  const dirty = text !== initial;
   return (
-    <div key={draftKey(row.key, row.value)} className="flex gap-2">
-      <input
-        type="text"
-        defaultValue={initial}
+    <div className="flex max-w-2xl items-center gap-2">
+      <Input
+        value={text}
         disabled={busy}
         onChange={(e) => setText(e.target.value)}
-        className="min-w-0 flex-1 rounded border bg-fd-secondary px-2 py-1 text-sm"
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && dirty) onWrite(text);
+        }}
+        className="h-9 font-mono"
       />
-      <button
-        type="button"
-        disabled={busy}
-        onClick={() => onWrite(text)}
-        className="shrink-0 rounded border px-2 py-1 text-xs disabled:opacity-50"
-      >
-        Save
-      </button>
+      {dirty && (
+        <Button variant="outline" size="sm" disabled={busy} onClick={() => onWrite(text)}>
+          Save
+        </Button>
+      )}
     </div>
   );
 }
@@ -366,10 +337,21 @@ function StringListControl({
 }: {
   row: FieldRow;
   busy: boolean;
-  onWrite: (value: unknown, opts?: { isClear?: boolean }) => void;
+  onWrite: WriteFn;
 }) {
   const initial = Array.isArray(row.value) ? (row.value as unknown[]).join('\n') : '';
   const [text, setText] = useState(initial);
+  // An empty textarea for every unset key was most of this page's height.
+  const [open, setOpen] = useState(row.isSet);
+  const dirty = text !== initial;
+
+  if (!open) {
+    return (
+      <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
+        Add entries…
+      </Button>
+    );
+  }
   function save() {
     const lines = Array.from(
       new Set(
@@ -382,22 +364,20 @@ function StringListControl({
     onWrite(lines);
   }
   return (
-    <div key={draftKey(row.key, row.value)} className="flex flex-col gap-1">
-      <textarea
+    <div className="flex max-w-2xl flex-col items-start gap-2">
+      <Textarea
         rows={3}
-        defaultValue={initial}
+        value={text}
         disabled={busy}
+        placeholder="one entry per line"
         onChange={(e) => setText(e.target.value)}
-        className="w-full rounded border bg-fd-secondary px-2 py-1 font-mono text-sm"
+        className="font-mono text-xs"
       />
-      <button
-        type="button"
-        disabled={busy}
-        onClick={save}
-        className="w-fit rounded border px-2 py-1 text-xs disabled:opacity-50"
-      >
-        Save
-      </button>
+      {dirty && (
+        <Button variant="outline" size="sm" disabled={busy} onClick={save}>
+          Save
+        </Button>
+      )}
     </div>
   );
 }
@@ -409,43 +389,44 @@ function EnumListControl({
 }: {
   row: FieldRow;
   busy: boolean;
-  onWrite: (value: unknown, opts?: { isClear?: boolean }) => void;
+  onWrite: WriteFn;
 }) {
   const current = new Set(Array.isArray(row.value) ? (row.value as unknown[]).map(String) : []);
   return (
-    <div className="flex flex-wrap gap-3">
+    <div className="flex flex-wrap gap-x-5 gap-y-2.5">
       {(row.options ?? []).map((o) => (
-        <label key={o} className="flex items-center gap-1 text-sm">
-          <input
-            type="checkbox"
+        <Label key={o} className="gap-2 font-normal">
+          <Checkbox
             disabled={busy}
             checked={current.has(o)}
-            onChange={(e) => {
+            onCheckedChange={(checked) => {
               const next = new Set(current);
-              if (e.target.checked) next.add(o);
+              if (checked) next.add(o);
               else next.delete(o);
               onWrite([...next]);
             }}
           />
-          {o}
-        </label>
+          <span className="font-mono text-xs">{o}</span>
+        </Label>
       ))}
     </div>
   );
 }
 
-function JsonControl({
-  row,
-  busy,
-  onWrite,
-}: {
-  row: FieldRow;
-  busy: boolean;
-  onWrite: (value: unknown, opts?: { isClear?: boolean }) => void;
-}) {
+function JsonControl({ row, busy, onWrite }: { row: FieldRow; busy: boolean; onWrite: WriteFn }) {
   const initial = row.isSet ? JSON.stringify(row.value, null, 2) : '';
   const [text, setText] = useState(initial);
+  const [open, setOpen] = useState(row.isSet);
   const [parseError, setParseError] = useState<string | null>(null);
+  const dirty = text !== initial;
+
+  if (!open) {
+    return (
+      <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
+        Edit JSON…
+      </Button>
+    );
+  }
   function save() {
     if (text.trim() === '') {
       onWrite(undefined, { isClear: true });
@@ -460,29 +441,27 @@ function JsonControl({
     }
   }
   return (
-    <div key={draftKey(row.key, row.value)} className="flex flex-col gap-1">
-      <textarea
+    <div className="flex max-w-2xl flex-col items-start gap-2">
+      <Textarea
         rows={6}
-        defaultValue={initial}
+        value={text}
         disabled={busy}
         onChange={(e) => setText(e.target.value)}
-        className="w-full rounded border bg-fd-secondary px-2 py-1 font-mono text-xs"
+        className="font-mono text-xs"
       />
-      {parseError && <p className="text-xs text-fd-primary">{parseError}</p>}
-      <button
-        type="button"
-        disabled={busy}
-        onClick={save}
-        className="w-fit rounded border px-2 py-1 text-xs disabled:opacity-50"
-      >
-        Save
-      </button>
+      {parseError && <p className="text-xs text-destructive">{parseError}</p>}
+      {dirty && (
+        <Button variant="outline" size="sm" disabled={busy} onClick={save}>
+          Save
+        </Button>
+      )}
     </div>
   );
 }
 
 function FieldRowView({
   row,
+  label,
   busy,
   pendingKey,
   confirmState,
@@ -490,6 +469,8 @@ function FieldRowView({
   write,
 }: {
   row: FieldRow;
+  /** The leaf name inside a parent cluster, else the full key. */
+  label: string;
   busy: boolean;
   pendingKey: string | null;
   confirmState: { key: string; value: unknown } | null;
@@ -510,52 +491,85 @@ function FieldRowView({
 
   if (confirming) {
     return (
-      <li className="bg-fd-muted px-2 py-3 text-sm">
-        <p className="mb-2 font-mono text-xs">{CONFIRM_MESSAGE(row.key, confirmState.value)}</p>
+      <li className="bg-accent px-3 py-4">
+        <p className="mb-3 max-w-prose font-mono text-xs">
+          {CONFIRM_MESSAGE(row.key, confirmState.value)}
+        </p>
         <div className="flex gap-2">
-          <button
-            type="button"
+          <Button
+            size="sm"
             disabled={rowBusy}
             onClick={() => {
               setConfirmState(null);
               write(row.path, confirmState.value, row.key);
             }}
-            className="rounded border px-2 py-0.5 text-xs disabled:opacity-50"
           >
             Confirm
-          </button>
-          <button
-            type="button"
-            onClick={() => setConfirmState(null)}
-            className="rounded border px-2 py-0.5 text-xs"
-          >
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => setConfirmState(null)}>
             Cancel
-          </button>
+          </Button>
         </div>
       </li>
     );
   }
 
   return (
-    <li className="flex flex-wrap items-start gap-3 px-2 py-3">
-      <span className="w-56 shrink-0 break-all font-mono text-xs">{row.key}</span>
-      <Badges row={row} />
-      <div className="min-w-0 flex-1">
-        <FieldControl row={row} busy={rowBusy} onWrite={onWrite} />
-        <Description row={row} />
-      </div>
-      {row.isSet && !row.readOnly && (
-        <button
-          type="button"
-          disabled={rowBusy}
-          onClick={() => onWrite(undefined, { isClear: true })}
-          className="shrink-0 rounded border px-2 py-0.5 text-xs disabled:opacity-50"
-        >
-          Clear
-        </button>
-      )}
-    </li>
+    <Row
+      name={<KeyName label={label} isSet={row.isSet} />}
+      badges={<Flags row={row} />}
+      description={<Description description={row.description} docsUrl={row.docsUrl} />}
+      aside={
+        row.isSet ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={rowBusy}
+            onClick={() => onWrite(undefined, { isClear: true })}
+            className="text-muted-foreground"
+          >
+            Clear
+          </Button>
+        ) : null
+      }
+    >
+      <FieldControl row={row} busy={rowBusy} onWrite={onWrite} />
+    </Row>
   );
+}
+
+/** Split a group's rows into the top-level keys and one cluster per parent object path, so
+ * `permissions.allow` reads as `allow` under a `permissions` heading instead of repeating the
+ * prefix on every row. Clusters keep first-appearance (schema) order. */
+function cluster(rows: FieldRow[]): { parent: string | null; rows: FieldRow[] }[] {
+  const bare: FieldRow[] = [];
+  const byParent = new Map<string, FieldRow[]>();
+  for (const r of rows) {
+    if (r.path.length === 1) {
+      bare.push(r);
+      continue;
+    }
+    const parent = r.path.slice(0, -1).join('.');
+    const list = byParent.get(parent);
+    if (list) list.push(r);
+    else byParent.set(parent, [r]);
+  }
+  const out: { parent: string | null; rows: FieldRow[] }[] = [];
+  if (bare.length > 0) out.push({ parent: null, rows: bare });
+  for (const [parent, list] of byParent) out.push({ parent, rows: list });
+  return out;
+}
+
+const alpha = (s: string) => s.toLowerCase().replace(/[^a-z]/g, '');
+
+/** The cluster heading minus whatever the group heading above it already said:
+ * `sandbox.network` under "Sandbox" reads `network`. When nothing is left — `permissions`
+ * under "Permissions" — there is no heading, and those rows carry their full key instead,
+ * which keeps `permissions.disableAutoMode` distinct from the top-level `disableAutoMode`. */
+function clusterLabel(parent: string, group: string): string | null {
+  const segments = parent.split('.');
+  const kept = alpha(group).startsWith(alpha(segments[0])) ? segments.slice(1) : segments;
+  return kept.length === 0 ? null : kept.join('.');
 }
 
 export function SettingsForm({
@@ -574,6 +588,11 @@ export function SettingsForm({
   const [pendingKey, setPendingKey] = useState<string | null>(null);
   const [confirmState, setConfirmState] = useState<{ key: string; value: unknown } | null>(null);
   const [isPending, startTransition] = useTransition();
+  // Groups holding a set key start open; the rest stay shut, so the page opens as a
+  // short index rather than 200 expanded rows.
+  const [openGroups, setOpenGroups] = useState<Set<string>>(
+    () => new Set(rows.filter((r) => r.isSet).map((r) => (r.deprecated ? 'Deprecated' : r.group))),
+  );
 
   const f = filter.trim().toLowerCase();
   const visible = rows.filter((r) => {
@@ -584,11 +603,16 @@ export function SettingsForm({
 
   const grouped = new Map<string, FieldRow[]>();
   for (const r of visible) {
-    const g = r.deprecated ? 'Deprecated' : r.group;
     if (r.deprecated && !r.isSet) continue; // deprecated rows hidden unless set
+    const g = r.deprecated ? 'Deprecated' : r.group;
     if (!grouped.has(g)) grouped.set(g, []);
     grouped.get(g)?.push(r);
   }
+
+  const shownGroups = groupOrder.filter((g) => grouped.has(g));
+  // Searching is a request to see the matches, so it overrides the collapsed state.
+  const forceOpen = f !== '' || onlySet;
+  const allOpen = shownGroups.length > 0 && shownGroups.every((g) => openGroups.has(g));
 
   function write(path: string[], value: unknown, key: string) {
     setPendingKey(key);
@@ -597,56 +621,98 @@ export function SettingsForm({
       const r = await action(path, value);
       setResult(r);
       setPendingKey(null);
-      if (r.ok) {
-        setSavedKey(key);
-      }
+      if (r.ok) setSavedKey(key);
     });
   }
 
   const setCount = rows.filter((r) => r.isSet).length;
 
   return (
-    <div className="not-prose flex flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-3">
-        <input
+    <div className="not-prose flex w-full flex-col">
+      <Toolbar>
+        <Input
           type="search"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="Filter settings…"
-          className="w-64 rounded border bg-fd-secondary px-3 py-1.5 text-sm"
+          placeholder="Filter keys…"
+          className="h-9 w-64"
         />
-        <label className="flex items-center gap-1 text-xs text-fd-muted-foreground">
-          <input type="checkbox" checked={onlySet} onChange={(e) => setOnlySet(e.target.checked)} />
-          Show only set keys
-        </label>
-        <span className="text-xs text-fd-muted-foreground">
-          {setCount} of {rows.length} keys set
-        </span>
-      </div>
-      <ErrorBox result={result} />
+        <Label className="gap-2 font-normal text-muted-foreground">
+          <Checkbox checked={onlySet} onCheckedChange={(c) => setOnlySet(Boolean(c))} />
+          <span className="text-xs">Only set</span>
+        </Label>
+        <Tally>
+          {setCount} set · {rows.length} keys
+        </Tally>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="ml-auto text-muted-foreground"
+          onClick={() => setOpenGroups(allOpen ? new Set() : new Set(shownGroups))}
+        >
+          {allOpen ? 'Collapse all' : 'Expand all'}
+        </Button>
+      </Toolbar>
+
+      <ErrorNote error={result && !result.ok ? result.error : null} />
       {savedKey && !isPending && (
-        <p className="text-xs text-fd-muted-foreground">Saved {savedKey}</p>
+        <p className="pb-2 text-xs text-muted-foreground">
+          Saved <span className="font-mono">{savedKey}</span>
+        </p>
       )}
-      {groupOrder
-        .filter((g) => grouped.has(g))
-        .map((g) => (
-          <section key={g}>
-            <h3 className="mb-1 text-sm font-medium">{g}</h3>
-            <ul className="geist-ledger">
-              {(grouped.get(g) ?? []).map((row) => (
-                <FieldRowView
-                  key={row.key}
-                  row={row}
-                  busy={isPending}
-                  pendingKey={pendingKey}
-                  confirmState={confirmState}
-                  setConfirmState={setConfirmState}
-                  write={write}
-                />
-              ))}
-            </ul>
-          </section>
-        ))}
+
+      {shownGroups.map((g) => {
+        const list = grouped.get(g) ?? [];
+        const setHere = list.filter((r) => r.isSet).length;
+        return (
+          <GroupPanel
+            key={g}
+            title={g}
+            open={forceOpen || openGroups.has(g)}
+            onOpenChange={(next) =>
+              setOpenGroups((prev) => {
+                const s = new Set(prev);
+                if (next) s.add(g);
+                else s.delete(g);
+                return s;
+              })
+            }
+            tally={
+              <Tally>
+                {setHere > 0 && `${setHere} set · `}
+                {list.length}
+              </Tally>
+            }
+          >
+            {cluster(list).map(({ parent, rows: clustered }) => {
+              const heading = parent === null ? null : clusterLabel(parent, g);
+              return (
+                <div key={parent ?? '__bare__'}>
+                  {heading && (
+                    <h4 className="mt-5 mb-1 px-2 font-mono text-xs text-muted-foreground">
+                      {heading}
+                    </h4>
+                  )}
+                  <Ledger>
+                    {clustered.map((row) => (
+                      <FieldRowView
+                        key={row.key}
+                        row={row}
+                        label={heading ? row.path[row.path.length - 1] : row.key}
+                        busy={isPending}
+                        pendingKey={pendingKey}
+                        confirmState={confirmState}
+                        setConfirmState={setConfirmState}
+                        write={write}
+                      />
+                    ))}
+                  </Ledger>
+                </div>
+              );
+            })}
+          </GroupPanel>
+        );
+      })}
     </div>
   );
 }
@@ -660,81 +726,90 @@ function EnvRowView({
   busy: boolean;
   write: (name: string, value: unknown) => void;
 }) {
-  const [text, setText] = useState('');
+  const initial = row.secret ? '' : (row.value ?? '');
+  const [text, setText] = useState(initial);
+  const dirty = text !== initial && text !== '';
+
   return (
-    <li className="flex flex-wrap items-start gap-3 px-2 py-3">
-      <span className="w-64 shrink-0 break-all font-mono text-xs">{row.name}</span>
-      {row.secret && (
-        <span className="rounded-full border px-1.5 py-0 text-[10px] text-fd-muted-foreground">secret</span>
-      )}
-      {row.deprecated && (
-        <span className="rounded-full border border-fd-primary/50 px-1.5 py-0 text-[10px] text-fd-primary">
-          deprecated
+    <Row
+      name={
+        <span className="font-mono text-xs">
+          <SetDot set />
+          {row.name}
         </span>
-      )}
-      <div className="flex min-w-0 flex-1 flex-col gap-1">
-        {row.options ? (
-          <select
-            disabled={busy}
-            defaultValue={row.value ?? ''}
-            onChange={(e) => {
-              if (e.target.value === '') write(row.name, undefined);
-              else write(row.name, e.target.value);
-            }}
-            className="rounded border bg-fd-secondary px-2 py-1 text-sm"
-          >
-            <option value="">— default (unset) —</option>
-            {row.options.map((o) => (
-              <option key={o} value={o}>
-                {o}
-              </option>
-            ))}
-          </select>
-        ) : (
-          <div className="flex gap-2">
-            <input
-              type={row.secret ? 'password' : 'text'}
-              defaultValue={row.secret ? '' : (row.value ?? '')}
-              placeholder={row.secret && row.isSet ? '•••••••• (set)' : undefined}
-              disabled={busy}
-              onChange={(e) => setText(e.target.value)}
-              className="min-w-0 flex-1 rounded border bg-fd-secondary px-2 py-1 text-sm"
-            />
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => {
-                if (row.secret && text === '') return; // never write an empty secret by accident
-                write(row.name, text);
-              }}
-              className="shrink-0 rounded border px-2 py-1 text-xs disabled:opacity-50"
-            >
-              Save
-            </button>
-          </div>
-        )}
-        {row.description && <p className="text-xs text-fd-muted-foreground">{row.description}</p>}
-      </div>
-      {row.isSet && (
-        <button
-          type="button"
+      }
+      badges={
+        row.secret || row.deprecated ? (
+          <span className="flex flex-wrap gap-1.5">
+            {row.secret && <Badge variant="outline">secret</Badge>}
+            {row.deprecated && <Badge variant="outline">deprecated</Badge>}
+          </span>
+        ) : null
+      }
+      description={<Description description={row.description} />}
+      aside={
+        <Button
+          variant="ghost"
+          size="sm"
           disabled={busy}
           onClick={() => write(row.name, undefined)}
-          className="shrink-0 rounded border px-2 py-0.5 text-xs disabled:opacity-50"
+          className="text-muted-foreground"
         >
           Clear
-        </button>
+        </Button>
+      }
+    >
+      {row.options ? (
+        <ValueSelect
+          busy={busy}
+          label={row.name}
+          unsetText="Not set"
+          value={row.value ?? UNSET}
+          onChange={(v) => write(row.name, v === UNSET ? undefined : v)}
+          items={[
+            { value: UNSET, label: 'Not set' },
+            ...row.options.map((o) => ({ value: o, label: o, mono: true })),
+          ]}
+        />
+      ) : (
+        <div className="flex max-w-2xl items-center gap-2">
+          <Input
+            type={row.secret ? 'password' : 'text'}
+            value={text}
+            placeholder={row.secret && row.isSet ? '•••••••• (set)' : undefined}
+            disabled={busy}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && dirty) write(row.name, text);
+            }}
+            className="h-9 font-mono"
+          />
+          {dirty && (
+            <Button variant="outline" size="sm" disabled={busy} onClick={() => write(row.name, text)}>
+              Save
+            </Button>
+          )}
+        </div>
       )}
-    </li>
+    </Row>
   );
 }
 
-export function EnvForm({ rows, specs, action }: { rows: EnvRow[]; specs: EnvSpec[]; action: Update }) {
+export function EnvForm({
+  rows,
+  specs,
+  action,
+}: {
+  rows: EnvRow[];
+  specs: EnvSpec[];
+  action: Update;
+}) {
   const [result, setResult] = useState<SetResult | null>(null);
   const [pendingName, setPendingName] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const [addName, setAddName] = useState('');
   const [addValue, setAddValue] = useState('');
+  const [catalogOpen, setCatalogOpen] = useState(false);
 
   function write(name: string, value: unknown) {
     setPendingName(name);
@@ -751,39 +826,28 @@ export function EnvForm({ rows, specs, action }: { rows: EnvRow[]; specs: EnvSpe
 
   const specByName = new Map(specs.map((s) => [s.name, s]));
   const addSpec = specByName.get(addName.toUpperCase());
+  // The catalog lists what is *not* set yet; anything set is already a row above.
+  const setNames = new Set(rows.map((r) => r.name));
+  const unset = specs.filter((s) => !setNames.has(s.name));
   const groups = new Map<string, EnvSpec[]>();
-  for (const s of specs) {
+  for (const s of unset) {
     if (!groups.has(s.group)) groups.set(s.group, []);
     groups.get(s.group)?.push(s);
   }
+  const canAdd = /^[A-Z_][A-Z0-9_]*$/.test(addName) && addValue !== '';
 
   return (
-    <div className="not-prose flex flex-col gap-4">
-      <ErrorBox result={result} />
-      <section>
-        <h3 className="mb-1 text-sm font-medium">Set variables</h3>
-        {rows.length === 0 && <p className="text-xs text-fd-muted-foreground">None set.</p>}
-        <ul className="geist-ledger">
-          {rows.map((row) => (
-            <EnvRowView
-              key={row.name}
-              row={row}
-              busy={isPending && pendingName === row.name}
-              write={write}
-            />
-          ))}
-        </ul>
-      </section>
-      <section>
-        <h3 className="mb-1 text-sm font-medium">Add a variable</h3>
+    <div className="not-prose flex w-full flex-col gap-6">
+      <ErrorNote error={result && !result.ok ? result.error : null} />
+
+      <div className="flex flex-col gap-2">
         <div className="flex flex-wrap items-center gap-2">
-          <input
+          <Input
             list="env-var-names"
-            type="text"
             value={addName}
             onChange={(e) => setAddName(e.target.value.toUpperCase())}
             placeholder="NAME"
-            className="w-56 rounded border bg-fd-secondary px-2 py-1 font-mono text-sm"
+            className="h-9 w-64 font-mono"
           />
           <datalist id="env-var-names">
             {specs.map((s) => (
@@ -791,68 +855,100 @@ export function EnvForm({ rows, specs, action }: { rows: EnvRow[]; specs: EnvSpe
             ))}
           </datalist>
           {addSpec?.options ? (
-            <select
-              value={addValue}
-              onChange={(e) => setAddValue(e.target.value)}
-              className="rounded border bg-fd-secondary px-2 py-1 text-sm"
+            <Select
+              value={addValue === '' ? UNSET : addValue}
+              onValueChange={(v) => setAddValue(String(v) === UNSET ? '' : String(v))}
             >
-              <option value="">choose…</option>
-              {addSpec.options.map((o) => (
-                <option key={o} value={o}>
-                  {o}
-                </option>
-              ))}
-            </select>
+              <SelectTrigger className="h-9 w-56">
+                <SelectValue>
+                  {(v: string) =>
+                    v === UNSET ? (
+                      <span className="text-muted-foreground">Choose a value…</span>
+                    ) : (
+                      <span className="font-mono text-xs">{String(v)}</span>
+                    )
+                  }
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={UNSET}>Choose a value…</SelectItem>
+                {addSpec.options.map((o) => (
+                  <SelectItem key={o} value={o}>
+                    <span className="font-mono text-xs">{o}</span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           ) : (
-            <input
+            <Input
               type={addSpec?.secret ? 'password' : 'text'}
               value={addValue}
               onChange={(e) => setAddValue(e.target.value)}
               placeholder="value"
-              className="min-w-0 flex-1 rounded border bg-fd-secondary px-2 py-1 text-sm"
+              className="h-9 min-w-56 flex-1 font-mono"
             />
           )}
-          <button
-            type="button"
-            disabled={
-              isPending ||
-              !/^[A-Z_][A-Z0-9_]*$/.test(addName) ||
-              addValue === ''
-            }
+          <Button
+            variant="outline"
+            disabled={isPending || !canAdd}
             onClick={() => write(addName, addValue)}
-            className="rounded border px-2 py-1 text-xs disabled:opacity-50"
           >
-            Save
-          </button>
+            Add
+          </Button>
         </div>
-        {addSpec && <p className="mt-1 text-xs text-fd-muted-foreground">{addSpec.description}</p>}
-      </section>
-      <details>
-        <summary className="cursor-pointer text-sm font-medium">All documented variables ({specs.length})</summary>
-        <div className="mt-2 flex flex-col gap-3">
+        {addSpec && <Description description={addSpec.description} />}
+      </div>
+
+      {rows.length === 0 ? (
+        <p className="text-xs text-muted-foreground">None set.</p>
+      ) : (
+        <Ledger>
+          {rows.map((row) => (
+            <EnvRowView
+              key={`${row.name}:${row.value ?? ''}`}
+              row={row}
+              busy={isPending && pendingName === row.name}
+              write={write}
+            />
+          ))}
+        </Ledger>
+      )}
+
+      <GroupPanel
+        title="Documented, not set"
+        open={catalogOpen}
+        onOpenChange={setCatalogOpen}
+        tally={<Tally>{unset.length}</Tally>}
+      >
+        <div className="flex flex-col gap-5 pt-2">
           {[...groups.entries()].map(([group, entries]) => (
             <div key={group}>
-              <h4 className="mb-1 text-xs font-medium text-fd-muted-foreground">{group}</h4>
-              <ul className="geist-ledger">
+              <h4 className="mb-1 px-2 text-xs font-medium text-muted-foreground">{group}</h4>
+              <Ledger>
                 {entries.map((s) => (
-                  <li key={s.name} className="flex flex-wrap items-baseline gap-2 px-2 py-2 text-xs">
-                    <span className="font-mono">{s.name}</span>
-                    {s.secret && <span className="text-fd-muted-foreground">(secret)</span>}
-                    <span className="min-w-0 flex-1 text-fd-muted-foreground">{s.description}</span>
-                    <button
-                      type="button"
+                  <li
+                    key={s.name}
+                    className="grid items-baseline gap-x-6 gap-y-1 px-2 py-2.5 lg:grid-cols-[minmax(14rem,20rem)_minmax(0,1fr)_auto]"
+                  >
+                    <span className="min-w-0 break-all font-mono text-xs">{s.name}</span>
+                    <span className="min-w-0 max-w-prose text-xs leading-relaxed text-muted-foreground">
+                      {summarize(s.description)}
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      className="justify-self-start text-muted-foreground"
                       onClick={() => setAddName(s.name)}
-                      className="shrink-0 rounded border px-1.5 py-0 text-[10px]"
                     >
-                      set…
-                    </button>
+                      Set…
+                    </Button>
                   </li>
                 ))}
-              </ul>
+              </Ledger>
             </div>
           ))}
         </div>
-      </details>
+      </GroupPanel>
     </div>
   );
 }
