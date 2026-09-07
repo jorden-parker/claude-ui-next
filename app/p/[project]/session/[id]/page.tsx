@@ -1,6 +1,6 @@
 import { notFound } from 'next/navigation';
 import { DocsDescription, DocsPage, DocsTitle } from 'fumadocs-ui/layouts/docs/page';
-import { readTranscript } from '@/lib/claude/data';
+import { formatTokens, readTranscript } from '@/lib/claude/data';
 import { Transcript } from '@/components/transcript';
 
 export const dynamic = 'force-dynamic';
@@ -39,10 +39,25 @@ export default async function Page({
           {transcript.meta.userMessages} user · {transcript.meta.assistantMessages} assistant ·{' '}
           {transcript.meta.toolUses} tools
         </span>
+        {transcript.meta.tokens.messages > 0 && (
+          <span title="input · cache write · cache read · output">
+            tokens {formatTokens(transcript.meta.tokens.input)} in ·{' '}
+            {formatTokens(transcript.meta.tokens.cacheCreation)} cache-w ·{' '}
+            {formatTokens(transcript.meta.tokens.cacheRead)} cache-r ·{' '}
+            {formatTokens(transcript.meta.tokens.output)} out
+          </span>
+        )}
+        {transcript.meta.turns > 0 && (
+          <span>
+            {transcript.meta.turns} turns · avg{' '}
+            {Math.round(transcript.meta.turnDurationMs / transcript.meta.turns / 1000)}s
+          </span>
+        )}
       </div>
       {transcript.truncated && (
         <p className="rounded border border-fd-primary/50 bg-fd-card px-3 py-2 text-sm">
-          Long session — showing the first {transcript.blocks.length} blocks of {transcript.totalLines} lines.
+          Long session — showing the first {transcript.blocks.length} blocks of {transcript.totalLines} lines. Token
+          and turn totals cover only the blocks shown.
         </p>
       )}
       <Transcript blocks={transcript.blocks} />
