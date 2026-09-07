@@ -152,6 +152,7 @@ export async function setDeniedTools(add: string[], remove: string[]): Promise<W
 }
 
 const PATH_SEGMENT_RE = /^[A-Za-z0-9_$.:@-]+$/;
+const UNSAFE_SEGMENTS = new Set(['__proto__', 'constructor', 'prototype']);
 
 /**
  * Set (or with `value === undefined`, delete) one setting at `path`.
@@ -165,6 +166,11 @@ export async function setSettingValue(path: string[], value: unknown): Promise<S
   ) {
     return { ok: false, error: 'Invalid request.' };
   }
+  // Never walk a path segment that could reach an object's prototype chain instead of
+  // a plain data key (`cursor[seg] = …` on `__proto__`/`constructor`/`prototype`).
+  if (path.some((p) => UNSAFE_SEGMENTS.has(p))) {
+    return { ok: false, error: 'Invalid request.' };
+  }
 
   const key = path.join('.');
 
@@ -173,6 +179,12 @@ export async function setSettingValue(path: string[], value: unknown): Promise<S
   }
   if (key === 'permissions.deny') {
     return { ok: false, error: 'Refused: permissions.deny is edited on the Tools page.' };
+  }
+  // Env vars are flat strings: `env.<NAME>` only, never a deeper path. The schema
+  // module's synthetic fallback already enforces this, but the writer checks it
+  // independently rather than relying solely on that module.
+  if (path[0] === 'env' && path.length !== 2) {
+    return { ok: false, error: `Refused: ${key} is not a setting this app may write.` };
   }
 
   const node = resolveNode(path);
@@ -206,7 +218,7 @@ export async function setSettingValue(path: string[], value: unknown): Promise<S
   const isUnknownTopLevel = node.type === 'any';
 
   const result = await mutateSettings((settings) => {
-    if (isUnknownTopLevel && !(path[0] in settings)) {
+    if (isUnknownTopLevel && !Object.prototype.hasOwnProperty.call(settings, path[0])) {
       return `Refused: ${key} is not a setting this app may write.`;
     }
 

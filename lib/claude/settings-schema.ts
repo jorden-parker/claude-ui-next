@@ -67,8 +67,10 @@ export function resolveNode(path: string[]): SchemaNode | null {
       node = resolveRef(props[segment]);
       continue;
     }
-    // env.<NAME> synthetic fallback for undocumented but legal names.
-    if (path[0] === 'env' && i === 1 && ENV_NAME.test(segment)) {
+    // env.<NAME> synthetic fallback for undocumented but legal names. Only a direct
+    // ['env', NAME] path qualifies — env vars are flat strings, so a deeper path like
+    // ['env', 'MY', 'deep'] must not resolve to anything writable.
+    if (path[0] === 'env' && i === 1 && path.length === 2 && ENV_NAME.test(segment)) {
       return { type: 'string' };
     }
     // Unknown top-level key: schema declares additionalProperties: true at root.
