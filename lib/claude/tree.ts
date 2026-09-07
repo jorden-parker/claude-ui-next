@@ -1,5 +1,5 @@
 import type { Root, Node } from 'fumadocs-core/page-tree';
-import { getGlobalClaudeMd, getSettings, listAllMemories, listMemories, listPlans, listSessions } from './data';
+import { getGlobalClaudeMd, getSettings, listAllMemories, listMemories, listPlans, listSessions, listSkills } from './data';
 
 const SIDEBAR_SESSION_LIMIT = 40;
 
@@ -17,10 +17,11 @@ export function projectDisplayName(realPath: string | null, slug: string): strin
 }
 
 export async function buildGlobalTree(): Promise<Root> {
-  const [claudeMd, settings, plans, groups] = await Promise.all([
+  const [claudeMd, settings, plans, skills, groups] = await Promise.all([
     getGlobalClaudeMd(),
     getSettings(),
     listPlans(),
+    listSkills(),
     listAllMemories(),
   ]);
 
@@ -33,6 +34,20 @@ export async function buildGlobalTree(): Promise<Root> {
   }
   if (plans.length > 0) {
     children.push({ type: 'page', name: `Plans (${plans.length})`, url: '/global/plans' });
+  }
+  const userSkills = skills.filter((s) => s.source === 'user');
+  if (skills.length > 0) {
+    children.push({
+      type: 'folder',
+      name: `Skills (${skills.length})`,
+      defaultOpen: false,
+      index: { type: 'page', name: 'All Skills', url: '/global/skills' },
+      children: userSkills.map((s) => ({
+        type: 'page',
+        name: s.name,
+        url: `/global/skills/${encodeURIComponent(s.id)}`,
+      })),
+    });
   }
   for (const g of groups) {
     children.push({ type: 'separator', name: projectDisplayName(g.realPath, g.slug) });

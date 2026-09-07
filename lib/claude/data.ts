@@ -6,6 +6,7 @@ import matter from 'gray-matter';
 const CLAUDE_DIR = process.env.CLAUDE_DIR ?? path.join(os.homedir(), '.claude');
 const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
 const PLANS_DIR = path.join(CLAUDE_DIR, 'plans');
+const SKILLS_DIR = path.join(CLAUDE_DIR, 'skills');
 
 export interface ProjectSummary {
   slug: string;
@@ -56,6 +57,21 @@ export interface PlanEntry {
 
 export interface Plan extends PlanEntry {
   content: string;
+}
+
+export interface SkillEntry {
+  /** Route id: 'caveman' for user skills, 'plugin-name:skill' for plugin skills. */
+  id: string;
+  name: string;
+  /** 'user' or the plugin name providing it. */
+  source: string;
+  description: string | null;
+}
+
+export interface Skill extends SkillEntry {
+  content: string;
+  /** Sibling files/dirs in the skill directory (excluding SKILL.md). */
+  files: string[];
 }
 
 export interface ProjectMemories {
@@ -411,5 +427,127 @@ export async function getPlan(file: string): Promise<Plan | null> {
     mtime: stat.mtime,
     size: stat.size,
     content: raw,
+  };
+}
+
+function parseSkillFrontmatter(raw: string, fallbackName: string): { name: string; description: string | null } {
+  const { data } = matter(raw);
+  return {
+    name: typeof data.name === 'string' ? data.name : fallbackName,
+    description: typeof data.description === 'string' ? data.description.trim() : null,
+  };
+}
+
+/** Directories under root (recursing at most `depth` levels) that contain a SKILL.md. */
+async function findSkillDirs(root: string, depth: number): Promise<string[]> {
+  let entries;
+  try {
+    entries = await fs.readdir(root, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const results: string[] = [];
+  if (entries.some((e) => e.isFile() && e.name === 'SKILL.md')) results.push(root);
+  if (depth > 0) {
+    for (const e of entries) {
+      if (e.isDirectory() && !e.name.startsWith('.')) {
+        results.push(...(await findSkillDirs(path.join(root, e.name), depth - 1)));
+      }
+    }
+  }
+  return results;
+}
+
+/** Installed plugins as [pluginName, installPath] pairs from installed_plugins.json (v2). */
+async function installedPlugins(): Promise<[string, string][]> {
+  let raw;
+  try {
+    raw = await fs.readFile(path.join(CLAUDE_DIR, 'plugins', 'installed_plugins.json'), 'utf8');
+  } catch {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    const plugins = parsed?.plugins;
+    if (typeof plugins !== 'object' || plugins === null) return [];
+    const pairs: [string, string][] = [];
+    for (const [key, installs] of Object.entries(plugins)) {
+      const installPath = Array.isArray(installs) ? installs[0]?.installPath : undefined;
+      if (typeof installPath === 'string') pairs.push([key.split('@')[0], installPath]);
+    }
+    return pairs;
+  } catch {
+    return [];
+  }
+}
+
+/** User skills from ~/.claude/skills plus skills of installed plugins. */
+export async function listSkills(): Promise<SkillEntry[]> {
+  const skills: SkillEntry[] = [];
+
+  const userDirs = await findSkillDirs(SKILLS_DIR, 1);
+  for (const dir of userDirs) {
+    if (dir === SKILLS_DIR) continue;
+    try {
+      const raw = await fs.readFile(path.join(dir, 'SKILL.md'), 'utf8');
+      const base = path.basename(dir);
+      const fm = parseSkillFrontmatter(raw, base);
+      skills.push({ id: base, name: fm.name, source: 'user', description: fm.description });
+    } catch {
+      // unreadable skill — skip
+    }
+  }
+
+  for (const [plugin, installPath] of await installedPlugins()) {
+    const dirs = await findSkillDirs(path.join(installPath, 'skills'), 2);
+    for (const dir of dirs) {
+      try {
+        const raw = await fs.readFile(path.join(dir, 'SKILL.md'), 'utf8');
+        const base = path.basename(dir);
+        const fm = parseSkillFrontmatter(raw, base);
+        skills.push({ id: `${plugin}:${base}`, name: fm.name, source: plugin, description: fm.description });
+      } catch {
+        // skip
+      }
+    }
+  }
+
+  return skills.sort((a, b) => Number(a.source !== 'user') - Number(b.source !== 'user') || a.id.localeCompare(b.id));
+}
+
+export async function getSkill(id: string): Promise<Skill | null> {
+  if (!/^[A-Za-z0-9_-]+(:[A-Za-z0-9_-]+)?$/.test(id)) return null;
+  const [first, second] = id.split(':');
+
+  let dir: string | null = null;
+  if (second === undefined) {
+    dir = path.join(SKILLS_DIR, first);
+  } else {
+    const plugin = (await installedPlugins()).find(([name]) => name === first);
+    if (plugin) {
+      const dirs = await findSkillDirs(path.join(plugin[1], 'skills'), 2);
+      dir = dirs.find((d) => path.basename(d) === second) ?? null;
+    }
+  }
+  if (dir === null) return null;
+
+  let raw, entries;
+  try {
+    [raw, entries] = await Promise.all([
+      fs.readFile(path.join(dir, 'SKILL.md'), 'utf8'),
+      fs.readdir(dir),
+    ]);
+  } catch {
+    return null;
+  }
+  const fm = parseSkillFrontmatter(raw, path.basename(dir));
+  const { content } = matter(raw);
+  return {
+    id,
+    name: fm.name,
+    source: second === undefined ? 'user' : first,
+    description: fm.description,
+    content,
+    files: entries.filter((f) => f !== 'SKILL.md').sort(),
   };
 }
