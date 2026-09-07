@@ -39,7 +39,14 @@ export type TranscriptBlock =
   | { kind: 'text'; role: 'user' | 'assistant'; text: string; timestamp?: string }
   | { kind: 'thinking'; text: string; timestamp?: string }
   | { kind: 'tool-use'; name: string; input: unknown; id: string; timestamp?: string }
-  | { kind: 'tool-result'; toolUseId: string; text: string; isError: boolean; timestamp?: string };
+  | {
+      kind: 'tool-result';
+      toolUseId: string;
+      text: string;
+      isError: boolean;
+      timestamp?: string;
+      persistedFile?: string;
+    };
 
 export interface TokenUsage {
   input: number;
@@ -322,6 +329,14 @@ function extractText(content: unknown): string | null {
   return null;
 }
 
+const PERSISTED_FILE = /tool-results\/([A-Za-z0-9_-]+\.txt)\b/;
+
+/** Basename of the spilled output file named in a `<persisted-output>` result, or undefined. */
+function persistedFileOf(text: string): string | undefined {
+  if (!text.startsWith('<persisted-output>')) return undefined;
+  return text.match(PERSISTED_FILE)?.[1];
+}
+
 function isNoisePrompt(text: string): boolean {
   return text.startsWith('<') || text.startsWith('Caveat:');
 }
@@ -440,12 +455,14 @@ export function parseTranscript(raw: string): Transcript {
           if (item?.type === 'text' && typeof item.text === 'string') {
             blocks.push({ kind: 'text', role: 'user', text: item.text, timestamp: entry.timestamp });
           } else if (item?.type === 'tool_result') {
+            const text = extractText(item.content) ?? JSON.stringify(item.content);
             blocks.push({
               kind: 'tool-result',
               toolUseId: item.tool_use_id ?? '',
-              text: extractText(item.content) ?? JSON.stringify(item.content),
+              text,
               isError: item.is_error === true,
               timestamp: entry.timestamp,
+              persistedFile: persistedFileOf(text),
             });
           }
         }
