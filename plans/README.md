@@ -16,7 +16,7 @@ before starting, honor its STOP conditions, and update your row when done.
 | 003  | Plans browser at /global/plans | P2 | M | — | DONE |
 | 004  | Skills browser at /global/skills | P2 | M | — | DONE |
 | 005  | Prompt history at /global/history | P2 | M | — | DONE |
-| 006  | Transcript improvements (timestamps, user markdown, metadata header) | P2 | M | 001 (soft) | TODO |
+| 006  | Transcript improvements (timestamps, user markdown, metadata header) | P2 | M | 001 (soft) | DONE |
 | 007  | Tool budget page at /global/tools (usage stats + per-tool switches + presets) | P2 | M | — | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale)

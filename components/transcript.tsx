@@ -7,14 +7,27 @@ function clamp(text: string): string {
   return text.length > CLAMP ? `${text.slice(0, CLAMP)}\n… (${text.length - CLAMP} chars truncated)` : text;
 }
 
+function blockTime(timestamp?: string): string | null {
+  if (!timestamp) return null;
+  const d = new Date(timestamp);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleTimeString('en-US', { hour12: false });
+}
+
 function Block({ block }: { block: TranscriptBlock }) {
   switch (block.kind) {
     case 'text':
       if (block.role === 'user') {
+        const time = blockTime(block.timestamp);
         return (
           <div className="rounded-lg border bg-fd-secondary px-4 py-3">
-            <div className="mb-1 text-xs font-medium uppercase tracking-wide text-fd-muted-foreground">User</div>
-            <div className="prose prose-sm max-w-none whitespace-pre-wrap break-words text-sm">{clamp(block.text)}</div>
+            <div className="mb-1 flex items-baseline justify-between">
+              <span className="text-xs font-medium uppercase tracking-wide text-fd-muted-foreground">User</span>
+              {time && <span className="font-mono text-xs text-fd-muted-foreground">{time}</span>}
+            </div>
+            <div className="prose prose-sm max-w-none break-words text-sm">
+              <Markdown text={clamp(block.text)} />
+            </div>
           </div>
         );
       }

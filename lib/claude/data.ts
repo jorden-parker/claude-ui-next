@@ -37,12 +37,25 @@ export interface SessionSummary {
 
 export type TranscriptBlock =
   | { kind: 'text'; role: 'user' | 'assistant'; text: string; timestamp?: string }
-  | { kind: 'thinking'; text: string }
-  | { kind: 'tool-use'; name: string; input: unknown; id: string }
-  | { kind: 'tool-result'; toolUseId: string; text: string; isError: boolean };
+  | { kind: 'thinking'; text: string; timestamp?: string }
+  | { kind: 'tool-use'; name: string; input: unknown; id: string; timestamp?: string }
+  | { kind: 'tool-result'; toolUseId: string; text: string; isError: boolean; timestamp?: string };
+
+export interface SessionMetadata {
+  model: string | null;
+  version: string | null;
+  gitBranch: string | null;
+  /** ISO 8601 strings from the first/last timestamped entries. */
+  startedAt: string | null;
+  endedAt: string | null;
+  userMessages: number;
+  assistantMessages: number;
+  toolUses: number;
+}
 
 export interface Transcript {
   blocks: TranscriptBlock[];
+  meta: SessionMetadata;
   totalLines: number;
   skippedLines: number;
   truncated: boolean;
@@ -339,6 +352,16 @@ export async function readTranscript(slug: string, id: string): Promise<Transcri
   }
   const lines = raw.split('\n').filter((l) => l.trim() !== '');
   const blocks: TranscriptBlock[] = [];
+  const meta: SessionMetadata = {
+    model: null,
+    version: null,
+    gitBranch: null,
+    startedAt: null,
+    endedAt: null,
+    userMessages: 0,
+    assistantMessages: 0,
+    toolUses: 0,
+  };
   let skippedLines = 0;
   let truncated = false;
 
@@ -355,6 +378,16 @@ export async function readTranscript(slug: string, id: string): Promise<Transcri
       continue;
     }
 
+    if (typeof entry.timestamp === 'string') {
+      meta.startedAt ??= entry.timestamp;
+      meta.endedAt = entry.timestamp;
+    }
+    if (meta.version === null && typeof entry.version === 'string') meta.version = entry.version;
+    if (meta.gitBranch === null && typeof entry.gitBranch === 'string') meta.gitBranch = entry.gitBranch;
+    if (meta.model === null && entry.type === 'assistant' && typeof entry.message?.model === 'string') {
+      meta.model = entry.message.model;
+    }
+
     if (entry.type === 'user' && !entry.isMeta) {
       const content = entry.message?.content;
       if (typeof content === 'string') {
@@ -369,6 +402,7 @@ export async function readTranscript(slug: string, id: string): Promise<Transcri
               toolUseId: item.tool_use_id ?? '',
               text: extractText(item.content) ?? JSON.stringify(item.content),
               isError: item.is_error === true,
+              timestamp: entry.timestamp,
             });
           }
         }
@@ -385,9 +419,15 @@ export async function readTranscript(slug: string, id: string): Promise<Transcri
         if (item?.type === 'text' && typeof item.text === 'string') {
           blocks.push({ kind: 'text', role: 'assistant', text: item.text, timestamp: entry.timestamp });
         } else if (item?.type === 'thinking' && typeof item.thinking === 'string') {
-          blocks.push({ kind: 'thinking', text: item.thinking });
+          blocks.push({ kind: 'thinking', text: item.thinking, timestamp: entry.timestamp });
         } else if (item?.type === 'tool_use') {
-          blocks.push({ kind: 'tool-use', name: item.name ?? 'unknown', input: item.input, id: item.id ?? '' });
+          blocks.push({
+            kind: 'tool-use',
+            name: item.name ?? 'unknown',
+            input: item.input,
+            id: item.id ?? '',
+            timestamp: entry.timestamp,
+          });
         }
       }
     } else {
@@ -395,7 +435,29 @@ export async function readTranscript(slug: string, id: string): Promise<Transcri
     }
   }
 
-  return { blocks, totalLines: lines.length, skippedLines, truncated };
+  // A truncated read stops early, so the last entry seen is not the session's end.
+  if (truncated) {
+    for (const line of lines.slice(-20).reverse()) {
+      let entry;
+      try {
+        entry = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (typeof entry?.timestamp === 'string') {
+        meta.endedAt = entry.timestamp;
+        break;
+      }
+    }
+  }
+
+  for (const b of blocks) {
+    if (b.kind === 'text' && b.role === 'user') meta.userMessages++;
+    else if (b.kind === 'text' && b.role === 'assistant') meta.assistantMessages++;
+    else if (b.kind === 'tool-use') meta.toolUses++;
+  }
+
+  return { blocks, meta, totalLines: lines.length, skippedLines, truncated };
 }
 
 /** All markdown plans in ~/.claude/plans, newest first. */
