@@ -18,6 +18,11 @@ before starting, honor its STOP conditions, and update your row when done.
 | 005  | Prompt history at /global/history | P2 | M | — | DONE |
 | 006  | Transcript improvements (timestamps, user markdown, metadata header) | P2 | M | 001 (soft) | DONE |
 | 007  | Tool budget page at /global/tools (usage stats + per-tool switches + presets) | P2 | M | — | DONE on branch `advisor/007-tool-budget-presets`; live toggle (Step 8.6) left to the repo owner |
+| 008  | Token usage and turn timing per session (session header + project page) | P1 | M | — | DONE — reviewed & APPROVED on branch `advisor/008-session-token-usage` (3 commits on `b573de5`, worktree `.claude/worktrees/agent-a6df167a2047b73b2`); not merged |
+| 009  | Subagent transcripts and persisted tool outputs linked from the session viewer | P1 | M | 008 | DONE — reviewed & APPROVED on branch `advisor/009-subagent-transcripts` (5 commits on top of 008's `456e1b8`, worktree `.claude/worktrees/agent-a4e04a388e74db495`); not merged |
+| 010  | Plugins & hooks page at /global/plugins | P2 | M | — (edits `tree.ts`) | DONE — reviewed & APPROVED on branch `advisor/010-plugins-and-hooks` (3 commits on `b573de5`, worktree `.claude/worktrees/agent-a18eb7a536fac2f13`); not merged. Note: `data.ts` functions were reordered during a rebase; bodies verified identical |
+| 011  | "Files changed" per session from file-history snapshots (spike, then viewer) | P2 | M | 009 | DONE — reviewed & APPROVED on branch `advisor/011-session-file-changes` (2 commits on top of 009); deviation accepted: `decodeURIComponent` on the `[backup]` param because Next 16 leaves `@` as `%40` |
+| 012  | Editable settings page: every settings.json key and env var, schema-driven | P1 | L | 007 (writer refactor) | DONE — reviewed & APPROVED after 1 revision (deep env paths + prototype segments refused) on branch `advisor/012-settings-editor` (7 commits on `b573de5`, worktree `.claude/worktrees/agent-af92d53d10a1a00fc`); not merged. Accepted deviations: empty parents pruned on real deletes; round-trip assertion checks post-mutation keys |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale)
 
@@ -42,6 +47,34 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
   Overview → CLAUDE.md → Settings (002) → History (005) → Plans (003) → Skills folder (004) →
   per-project memory separators. Each plan states its exact insertion anchor; 005 inserts
   *between* Settings and Plans even though it executes after 003/004.
+
+### Plans 008–011 (direction audit, 2026-09-07, planned at `b573de5`)
+
+- **008 → 009 → 011 must run sequentially.** All three edit `lib/claude/data.ts` and the session
+  page; 009 extracts `parseTranscript(raw)` from `readTranscript` and expects 008's `seenMessageIds`
+  to be inside it; 011 reuses 009's clamped-read pattern and inserts its block after 009's
+  Subagents block.
+- **010 is independent** of 008/009/011 but edits `buildGlobalTree()` in `lib/claude/tree.ts` — do not
+  run it in the same worktree at the same time as any other plan touching that function.
+- Selection note: this run was non-interactive, so the four highest-leverage direction findings were
+  planned by default (see "Direction findings considered" below). Reorder or drop as you see fit.
+- 011 Step 1 findings (executor, 2026-09-07): on the fixture session `@v1` is never referenced by a snapshot, predates the first tracked Write, and differs from both that Write's content and `@v2` — consistent with v1 = pre-edit original. `V1_IS_ORIGINAL = true`. No `backupFileName` collisions, versions monotonic across the 3 tracked files. Version page labels versions as `vN` only (the "original / after edit N-1" wording was not applied — cosmetic follow-up).
+
+### Plan 012 (plan mode, 2026-09-07, planned at `b573de5`)
+
+- **012 refactors `lib/claude/settings-writer.ts`** (plan 007's file) into a generic guarded
+  `mutateSettings()` plus `setSettingValue(path, value)`. Branch from `advisor/007-tool-budget-presets`
+  (or `main` once 007 is merged). `setDeniedTools` and `/global/tools` must behave identically after.
+- **012 replaces `app/global/settings/page.tsx`** (plan 002's read-only viewer). Plan 010's
+  out-of-scope note "leave the raw hooks dump alone" is superseded by 012.
+- **012 edits `buildGlobalTree()`** (one line: Settings entry becomes unconditional). Same
+  single-worktree rule as 010.
+- Source of truth for every key, enum, default and env var is the vendored SchemaStore schema
+  (`https://json.schemastore.org/claude-code-settings.json`, 142 keys + 340 env vars on 2026-09-07).
+  The plan forbids hand-writing a catalog. Refresh is one `curl`.
+- Out of scope, recorded so nobody re-plans them: project/local settings scope switcher,
+  effective-value resolution across scopes, `~/.claude.json` (app state, not settings),
+  `keybindings.json`, structured hook/marketplace editors (JSON textarea is v1).
 
 ## Corrections made to the draft roadmap (so nobody re-derives them)
 
@@ -80,3 +113,39 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
 - None — this run was `plan` mode (no audit). The draft roadmap's "Future Backlog" table
   (subagent viewer, plugins viewer, full-text search, etc.) remains future work, intentionally
   not planned here.
+
+## Direction findings considered (audit of 2026-09-07, `improve next`)
+
+Grounded in the live `~/.claude` data (192 transcripts / 166 MB, 17 projects) and the repo at `b573de5`.
+
+Planned:
+
+- **DIR-01 token usage per session** → plan 008. Every assistant entry carries `message.usage`; the
+  parser discards it. Streamed lines repeat usage per `message.id` (6083 lines, 3035 ids) — dedup is mandatory.
+- **DIR-02 subagent transcripts + persisted outputs** → plan 009. 83 sidecar transcripts under
+  `<session>/subagents/`, joined to the parent via `.meta.json` `toolUseId`; 33 spilled outputs in
+  `<session>/tool-results/`. Plan 006 deferred exactly this.
+- **DIR-03 plugins & hooks viewer** → plan 010. 4 installed plugins, 1 with hooks, 1 user hook; plan
+  004 named this as the follow-up for `installedPlugins()`.
+- **DIR-04 files changed per session** → plan 011. 416 `file-history-snapshot` entries map paths to
+  full-content backups in `~/.claude/file-history/<sessionId>/`. Format is observed, not documented, so
+  the plan opens with a spike.
+
+Not planned (recorded so nobody re-audits them):
+
+- **Full-text search across sessions/memories** — `app/api/search/route.ts` indexes MDX docs only; the
+  sidebar caps sessions at 40. Real gap, but L effort: needs an index that survives 166 MB of JSONL
+  (mtime-keyed per-file cache is a start) and a UI decision (Fumadocs search dialog vs. a page).
+  Revisit after 008 lands — its `listSessionUsage` cache is the natural place to also store a
+  per-session text digest.
+- **Skill/tool usage stats from transcripts beyond tool counts** (which skills fire, how often) —
+  `Skill` tool_use inputs carry the skill name; S effort, but low value until someone asks.
+- **`~/.claude/sessions/*.json`** — per-process lock/peer records (`peerToken`, pid). Operational,
+  not user data. Not worth a page.
+- **`shell-snapshots/`, `paste-cache/`, `session-env/`, `uploads/`** — runtime caches. Skip.
+- **`output-styles/`** — one file (`adhd.md`). Could be a one-line link on `/global/settings`; not
+  worth its own plan.
+- **`statusline.json` / `statusline.sh`** — already noted as backlog in plan 002; still low value.
+- **`.boopervisor-*`, `boopervisor.json`** — third-party tool state, not Claude Code. Out of scope.
+- **Dollar-cost estimates** — rejected inside plan 008: no pricing table in the repo, prices change;
+  show tokens only.
