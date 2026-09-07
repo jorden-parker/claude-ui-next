@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { DocsDescription, DocsPage, DocsTitle } from 'fumadocs-ui/layouts/docs/page';
-import { formatTokens, listSubagents, readTranscript } from '@/lib/claude/data';
+import { formatTokens, listFileChanges, listSubagents, readTranscript } from '@/lib/claude/data';
 import { Transcript } from '@/components/transcript';
 
 export const dynamic = 'force-dynamic';
@@ -22,7 +22,11 @@ export default async function Page({
   params: Promise<{ project: string; id: string }>;
 }) {
   const { project, id } = await params;
-  const [transcript, subagents] = await Promise.all([readTranscript(project, id), listSubagents(project, id)]);
+  const [transcript, subagents, changes] = await Promise.all([
+    readTranscript(project, id),
+    listSubagents(project, id),
+    listFileChanges(project, id),
+  ]);
   if (!transcript) notFound();
 
   const base = `/p/${project}/session/${id}`;
@@ -83,6 +87,33 @@ export default async function Page({
                   {s.agentType ?? 'agent'}
                 </Link>
                 <span className="min-w-0 flex-1 truncate">{s.description ?? s.agentId}</span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      {changes.length > 0 && (
+        <details className="rounded-lg border bg-fd-card px-4 py-2 text-sm" open>
+          <summary className="cursor-pointer select-none text-xs font-medium uppercase tracking-wide text-fd-muted-foreground">
+            Files changed ({changes.length})
+          </summary>
+          <ul className="mt-2 flex flex-col gap-1">
+            {changes.map((f) => (
+              <li key={f.path} className="flex flex-wrap items-baseline gap-x-2">
+                <code className="text-xs">{f.path.replace(/^\/Users\/[^/]+/, '~')}</code>
+                <span className="text-xs text-fd-muted-foreground">
+                  {f.versions.map((v) =>
+                    v.exists ? (
+                      <Link key={v.version} href={`${base}/file/${v.backupFileName}`} className="mr-1 underline">
+                        v{v.version}
+                      </Link>
+                    ) : (
+                      <span key={v.version} className="mr-1 line-through">
+                        v{v.version}
+                      </span>
+                    ),
+                  )}
+                </span>
               </li>
             ))}
           </ul>
