@@ -986,6 +986,152 @@ export async function listSessionUsage(slug: string): Promise<Map<string, TokenU
   return out;
 }
 
+export interface FileVersion {
+  version: number;
+  backupFileName: string; // "<16 hex>@v<N>"
+  backupTime: string | null; // ISO
+  /** True if the backup file exists under ~/.claude/file-history/<sessionId>/. */
+  exists: boolean;
+  size: number | null;
+}
+
+export interface FileChange {
+  /** Absolute path: path.join(realParentDir, basename(key)). */
+  path: string;
+  versions: FileVersion[]; // ascending by version
+}
+
+const FILE_HISTORY_DIR = path.join(CLAUDE_DIR, 'file-history');
+const BACKUP_NAME = /^[0-9a-f]{16}@v\d+$/;
+
+// Step 1 spike (plans/README.md, plan 011): on the fixture session, the on-disk `@v1` backup for
+// each tracked file predates and does not match the content of that file's first tracked Write/Edit
+// tool call, and `@v1` is never referenced by any file-history-snapshot entry — consistent with `v1`
+// being an automatic pre-edit backup of the file's original content. No version collisions or
+// non-monotonic versions were observed across the fixture's three tracked files.
+const V1_IS_ORIGINAL = true;
+
+interface RawFileVersion {
+  backupFileName: string;
+  backupTime: string | null;
+}
+
+function scanFileChanges(raw: string): Map<string, Map<number, RawFileVersion>> {
+  const files = new Map<string, Map<number, RawFileVersion>>();
+  for (const line of raw.split('\n')) {
+    if (!line.includes('"file-history-snapshot"')) continue;
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const tracked = entry?.snapshot?.trackedFileBackups;
+    if (typeof tracked !== 'object' || tracked === null) continue;
+    for (const [key, v] of Object.entries(tracked as Record<string, any>)) {
+      if (typeof v?.backupFileName !== 'string' || !BACKUP_NAME.test(v.backupFileName)) continue;
+      const parent = typeof v.realParentDir === 'string' ? v.realParentDir : path.dirname(key);
+      const abs = path.join(parent, path.basename(key));
+      const version = typeof v.version === 'number' ? v.version : Number(v.backupFileName.split('@v')[1]);
+      let versions = files.get(abs);
+      if (!versions) {
+        versions = new Map();
+        files.set(abs, versions);
+      }
+      if (!versions.has(version)) {
+        versions.set(version, {
+          backupFileName: v.backupFileName,
+          backupTime: typeof v.backupTime === 'string' ? v.backupTime : null,
+        });
+      }
+    }
+  }
+  return files;
+}
+
+const fileChangesCache = new Map<string, { mtimeMs: number; files: Map<string, Map<number, RawFileVersion>> }>();
+
+/** Files edited in a session, with their file-history-backup version timeline. */
+export async function listFileChanges(slug: string, id: string): Promise<FileChange[]> {
+  if (!/^[\w-]+$/.test(id)) return [];
+  const full = path.join(projectDir(slug), `${id}.jsonl`);
+  let raw, stat;
+  try {
+    [raw, stat] = await Promise.all([fs.readFile(full, 'utf8'), fs.stat(full)]);
+  } catch {
+    return [];
+  }
+  let cached = fileChangesCache.get(full);
+  if (!cached || cached.mtimeMs !== stat.mtime.getTime()) {
+    cached = { mtimeMs: stat.mtime.getTime(), files: scanFileChanges(raw) };
+    fileChangesCache.set(full, cached);
+  }
+  const scanned = cached.files;
+
+  let onDisk = new Map<string, number>();
+  try {
+    const dir = path.join(FILE_HISTORY_DIR, id);
+    const names = await fs.readdir(dir);
+    const stats = await Promise.all(
+      names.map((n) =>
+        fs
+          .stat(path.join(dir, n))
+          .then((s) => [n, s.size] as const)
+          .catch(() => null),
+      ),
+    );
+    onDisk = new Map(stats.filter((x): x is readonly [string, number] => x !== null));
+  } catch {
+    // no file-history directory for this session
+  }
+
+  const out: FileChange[] = [];
+  for (const [p, versions] of scanned) {
+    const merged = new Map(versions);
+    const hash = [...merged.values()][0]!.backupFileName.split('@v')[0];
+    if (V1_IS_ORIGINAL && !merged.has(1) && onDisk.has(`${hash}@v1`)) {
+      merged.set(1, { backupFileName: `${hash}@v1`, backupTime: null });
+    }
+    out.push({
+      path: p,
+      versions: [...merged.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([version, v]) => ({
+          version,
+          backupFileName: v.backupFileName,
+          backupTime: v.backupTime,
+          exists: onDisk.has(v.backupFileName),
+          size: onDisk.get(v.backupFileName) ?? null,
+        })),
+    });
+  }
+  return out.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+const MAX_BACKUP_BYTES = 2 * 1024 * 1024;
+
+/** A file-history backup's content, from ~/.claude/file-history/<sessionId>/<backup>, clamped to 2 MB. */
+export async function getFileVersion(
+  id: string,
+  backup: string,
+): Promise<{ text: string; size: number; truncated: boolean } | null> {
+  if (!/^[\w-]+$/.test(id) || !BACKUP_NAME.test(backup)) return null;
+  try {
+    const full = path.join(FILE_HISTORY_DIR, id, backup);
+    const stat = await fs.stat(full);
+    const fd = await fs.open(full);
+    try {
+      const buf = Buffer.alloc(Math.min(stat.size, MAX_BACKUP_BYTES));
+      const { bytesRead } = await fd.read(buf, 0, buf.length, 0);
+      return { text: buf.toString('utf8', 0, bytesRead), size: stat.size, truncated: stat.size > MAX_BACKUP_BYTES };
+    } finally {
+      await fd.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
 /** Bare-name deny rules currently in ~/.claude/settings.json permissions.deny. */
 export async function getDeniedTools(): Promise<string[]> {
   const settings = await getSettings();
