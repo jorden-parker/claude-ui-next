@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { DocsBody, DocsPage, DocsTitle } from 'fumadocs-ui/layouts/docs/page';
-import { getProject, listMemories, listSessions } from '@/lib/claude/data';
+import { formatTokens, getProject, listMemories, listSessionUsage, listSessions } from '@/lib/claude/data';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,7 +10,11 @@ export default async function Page({ params }: { params: Promise<{ project: stri
   const summary = await getProject(project);
   if (!summary) notFound();
 
-  const [memories, sessions] = await Promise.all([listMemories(project), listSessions(project)]);
+  const [memories, sessions, usage] = await Promise.all([
+    listMemories(project),
+    listSessions(project),
+    listSessionUsage(project),
+  ]);
 
   return (
     <DocsPage>
@@ -34,6 +38,12 @@ export default async function Page({ params }: { params: Promise<{ project: stri
               <Link href={`/p/${project}/session/${s.id}`}>
                 {s.mtime.toLocaleString()} · {s.firstPrompt?.slice(0, 80) ?? s.id}
               </Link>
+              {usage.get(s.id) && (
+                <span className="text-fd-muted-foreground">
+                  {' '}
+                  · {formatTokens(usage.get(s.id)!.output)} out · {formatTokens(usage.get(s.id)!.cacheRead)} cache-r
+                </span>
+              )}
             </li>
           ))}
         </ul>

@@ -39,7 +39,33 @@ export type TranscriptBlock =
   | { kind: 'text'; role: 'user' | 'assistant'; text: string; timestamp?: string }
   | { kind: 'thinking'; text: string; timestamp?: string }
   | { kind: 'tool-use'; name: string; input: unknown; id: string; timestamp?: string }
-  | { kind: 'tool-result'; toolUseId: string; text: string; isError: boolean; timestamp?: string };
+  | {
+      kind: 'tool-result';
+      toolUseId: string;
+      text: string;
+      isError: boolean;
+      timestamp?: string;
+      persistedFile?: string;
+    };
+
+export interface TokenUsage {
+  input: number;
+  cacheCreation: number;
+  cacheRead: number;
+  output: number;
+  /** Distinct assistant messages (by message.id) that contributed to the totals. */
+  messages: number;
+}
+
+export function emptyUsage(): TokenUsage {
+  return { input: 0, cacheCreation: 0, cacheRead: 0, output: 0, messages: 0 };
+}
+
+export function formatTokens(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
+  return `${(n / 1_000_000).toFixed(2)}M`;
+}
 
 export interface SessionMetadata {
   model: string | null;
@@ -51,6 +77,11 @@ export interface SessionMetadata {
   userMessages: number;
   assistantMessages: number;
   toolUses: number;
+  /** Summed once per distinct assistant message.id. */
+  tokens: TokenUsage;
+  /** Count and total of `system`/`turn_duration` entries. */
+  turns: number;
+  turnDurationMs: number;
 }
 
 export interface Transcript {
@@ -663,8 +694,37 @@ function extractText(content: unknown): string | null {
   return null;
 }
 
+const PERSISTED_FILE = /tool-results\/([A-Za-z0-9_-]+\.txt)\b/;
+
+/** Basename of the spilled output file named in a `<persisted-output>` result, or undefined. */
+function persistedFileOf(text: string): string | undefined {
+  if (!text.startsWith('<persisted-output>')) return undefined;
+  return text.match(PERSISTED_FILE)?.[1];
+}
+
 function isNoisePrompt(text: string): boolean {
   return text.startsWith('<') || text.startsWith('Caveat:');
+}
+
+function readUsage(usage: unknown): TokenUsage | null {
+  if (typeof usage !== 'object' || usage === null) return null;
+  const u = usage as Record<string, unknown>;
+  const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+  return {
+    input: n(u.input_tokens),
+    cacheCreation: n(u.cache_creation_input_tokens),
+    cacheRead: n(u.cache_read_input_tokens),
+    output: n(u.output_tokens),
+    messages: 1,
+  };
+}
+
+function addUsage(into: TokenUsage, u: TokenUsage): void {
+  into.input += u.input;
+  into.cacheCreation += u.cacheCreation;
+  into.cacheRead += u.cacheRead;
+  into.output += u.output;
+  into.messages += u.messages;
 }
 
 export async function listSessions(slug: string): Promise<SessionSummary[]> {
@@ -707,14 +767,8 @@ async function readFirstPrompt(slug: string, file: string): Promise<string | nul
   return null;
 }
 
-export async function readTranscript(slug: string, id: string): Promise<Transcript | null> {
-  if (!/^[\w-]+$/.test(id)) return null;
-  let raw;
-  try {
-    raw = await fs.readFile(path.join(projectDir(slug), `${id}.jsonl`), 'utf8');
-  } catch {
-    return null;
-  }
+/** Parse transcript JSONL text. Pure: no I/O. Used for sessions and subagent sidecars alike. */
+export function parseTranscript(raw: string): Transcript {
   const lines = raw.split('\n').filter((l) => l.trim() !== '');
   const blocks: TranscriptBlock[] = [];
   const meta: SessionMetadata = {
@@ -726,9 +780,13 @@ export async function readTranscript(slug: string, id: string): Promise<Transcri
     userMessages: 0,
     assistantMessages: 0,
     toolUses: 0,
+    tokens: emptyUsage(),
+    turns: 0,
+    turnDurationMs: 0,
   };
   let skippedLines = 0;
   let truncated = false;
+  const seenMessageIds = new Set<string>();
 
   for (const line of lines) {
     if (blocks.length >= MAX_BLOCKS) {
@@ -762,12 +820,14 @@ export async function readTranscript(slug: string, id: string): Promise<Transcri
           if (item?.type === 'text' && typeof item.text === 'string') {
             blocks.push({ kind: 'text', role: 'user', text: item.text, timestamp: entry.timestamp });
           } else if (item?.type === 'tool_result') {
+            const text = extractText(item.content) ?? JSON.stringify(item.content);
             blocks.push({
               kind: 'tool-result',
               toolUseId: item.tool_use_id ?? '',
-              text: extractText(item.content) ?? JSON.stringify(item.content),
+              text,
               isError: item.is_error === true,
               timestamp: entry.timestamp,
+              persistedFile: persistedFileOf(text),
             });
           }
         }
@@ -775,6 +835,12 @@ export async function readTranscript(slug: string, id: string): Promise<Transcri
         skippedLines++;
       }
     } else if (entry.type === 'assistant') {
+      const messageId = typeof entry.message?.id === 'string' ? entry.message.id : null;
+      if (messageId !== null && !seenMessageIds.has(messageId)) {
+        seenMessageIds.add(messageId);
+        const usage = readUsage(entry.message?.usage);
+        if (usage) addUsage(meta.tokens, usage);
+      }
       const content = entry.message?.content;
       if (!Array.isArray(content)) {
         skippedLines++;
@@ -795,6 +861,9 @@ export async function readTranscript(slug: string, id: string): Promise<Transcri
           });
         }
       }
+    } else if (entry.type === 'system' && entry.subtype === 'turn_duration') {
+      meta.turns++;
+      if (typeof entry.durationMs === 'number') meta.turnDurationMs += entry.durationMs;
     } else {
       skippedLines++;
     }
@@ -825,6 +894,120 @@ export async function readTranscript(slug: string, id: string): Promise<Transcri
   return { blocks, meta, totalLines: lines.length, skippedLines, truncated };
 }
 
+export async function readTranscript(slug: string, id: string): Promise<Transcript | null> {
+  if (!/^[\w-]+$/.test(id)) return null;
+  let raw;
+  try {
+    raw = await fs.readFile(path.join(projectDir(slug), `${id}.jsonl`), 'utf8');
+  } catch {
+    return null;
+  }
+  return parseTranscript(raw);
+}
+
+export interface SubagentSummary {
+  agentId: string;
+  agentType: string | null;
+  description: string | null;
+  /** `id` of the parent's `Agent` tool_use block, or null if the sidecar .meta.json is missing. */
+  toolUseId: string | null;
+  mtime: Date;
+  size: number;
+}
+
+const AGENT_ID = /^[0-9a-f]{8,32}$/;
+const OUTPUT_FILE = /^[A-Za-z0-9_-]+\.txt$/;
+
+function sessionSidecarDir(slug: string, id: string): string | null {
+  if (!/^[\w-]+$/.test(id)) return null;
+  return path.join(projectDir(slug), id);
+}
+
+/** Subagent transcripts recorded under <session>/subagents, newest first. */
+export async function listSubagents(slug: string, id: string): Promise<SubagentSummary[]> {
+  const dir = sessionSidecarDir(slug, id);
+  if (dir === null) return [];
+  let entries;
+  try {
+    entries = await fs.readdir(path.join(dir, 'subagents'));
+  } catch {
+    return [];
+  }
+  const out = await Promise.all(
+    entries
+      .filter((f) => /^agent-[0-9a-f]+\.jsonl$/.test(f))
+      .map(async (f) => {
+        const agentId = f.slice('agent-'.length, -'.jsonl'.length);
+        const full = path.join(dir, 'subagents', f);
+        let stat;
+        try {
+          stat = await fs.stat(full);
+        } catch {
+          return null;
+        }
+        let meta: Record<string, unknown> = {};
+        try {
+          meta = JSON.parse(await fs.readFile(full.replace(/\.jsonl$/, '.meta.json'), 'utf8'));
+        } catch {
+          // sidecar missing or invalid — fields stay null
+        }
+        const str = (v: unknown) => (typeof v === 'string' ? v : null);
+        return {
+          agentId,
+          agentType: str(meta.agentType),
+          description: str(meta.description),
+          toolUseId: str(meta.toolUseId),
+          mtime: stat.mtime,
+          size: stat.size,
+        };
+      }),
+  );
+  return out
+    .filter((s): s is SubagentSummary => s !== null)
+    .sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+}
+
+export async function readSubagentTranscript(
+  slug: string,
+  id: string,
+  agentId: string,
+): Promise<Transcript | null> {
+  const dir = sessionSidecarDir(slug, id);
+  if (dir === null || !AGENT_ID.test(agentId)) return null;
+  let raw;
+  try {
+    raw = await fs.readFile(path.join(dir, 'subagents', `agent-${agentId}.jsonl`), 'utf8');
+  } catch {
+    return null;
+  }
+  return parseTranscript(raw);
+}
+
+const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
+
+/** A spilled tool output from <session>/tool-results, clamped to 2 MB. */
+export async function getPersistedOutput(
+  slug: string,
+  id: string,
+  file: string,
+): Promise<{ text: string; size: number; truncated: boolean } | null> {
+  const dir = sessionSidecarDir(slug, id);
+  if (dir === null || !OUTPUT_FILE.test(file)) return null;
+  try {
+    const full = path.join(dir, 'tool-results', file);
+    const stat = await fs.stat(full);
+    const fd = await fs.open(full);
+    try {
+      const buf = Buffer.alloc(Math.min(stat.size, MAX_OUTPUT_BYTES));
+      const { bytesRead } = await fd.read(buf, 0, buf.length, 0);
+      return { text: buf.toString('utf8', 0, bytesRead), size: stat.size, truncated: stat.size > MAX_OUTPUT_BYTES };
+    } finally {
+      await fd.close();
+    }
+  } catch {
+    return null;
+  }
+}
 export interface ToolUsage {
   name: string;
   count: number;
@@ -903,6 +1086,196 @@ export async function listToolUsage(): Promise<ToolUsage[]> {
   return [...totals.entries()]
     .map(([name, count]) => ({ name, count, lastUsed: latest.get(name) ?? null }))
     .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+}
+
+const sessionUsageCache = new Map<string, { mtimeMs: number; usage: TokenUsage }>();
+
+function scanUsage(raw: string): TokenUsage {
+  const total = emptyUsage();
+  const seen = new Set<string>();
+  for (const line of raw.split('\n')) {
+    if (!line.includes('"usage"')) continue;
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (entry?.type !== 'assistant') continue;
+    const id = entry.message?.id;
+    if (typeof id !== 'string' || seen.has(id)) continue;
+    seen.add(id);
+    const u = readUsage(entry.message?.usage);
+    if (u) addUsage(total, u);
+  }
+  return total;
+}
+
+/** Token totals per session id for one project, from an mtime-keyed cache. */
+export async function listSessionUsage(slug: string): Promise<Map<string, TokenUsage>> {
+  const out = new Map<string, TokenUsage>();
+  for (const f of await sessionFiles(slug)) {
+    const full = path.join(projectDir(slug), f.name);
+    let cached = sessionUsageCache.get(full);
+    if (!cached || cached.mtimeMs !== f.mtime.getTime()) {
+      let raw;
+      try {
+        raw = await fs.readFile(full, 'utf8');
+      } catch {
+        continue;
+      }
+      cached = { mtimeMs: f.mtime.getTime(), usage: scanUsage(raw) };
+      sessionUsageCache.set(full, cached);
+    }
+    out.set(f.name.replace(/\.jsonl$/, ''), cached.usage);
+  }
+  return out;
+}
+
+export interface FileVersion {
+  version: number;
+  backupFileName: string; // "<16 hex>@v<N>"
+  backupTime: string | null; // ISO
+  /** True if the backup file exists under ~/.claude/file-history/<sessionId>/. */
+  exists: boolean;
+  size: number | null;
+}
+
+export interface FileChange {
+  /** Absolute path: path.join(realParentDir, basename(key)). */
+  path: string;
+  versions: FileVersion[]; // ascending by version
+}
+
+const FILE_HISTORY_DIR = path.join(CLAUDE_DIR, 'file-history');
+const BACKUP_NAME = /^[0-9a-f]{16}@v\d+$/;
+
+// Step 1 spike (plans/README.md, plan 011): on the fixture session, the on-disk `@v1` backup for
+// each tracked file predates and does not match the content of that file's first tracked Write/Edit
+// tool call, and `@v1` is never referenced by any file-history-snapshot entry — consistent with `v1`
+// being an automatic pre-edit backup of the file's original content. No version collisions or
+// non-monotonic versions were observed across the fixture's three tracked files.
+const V1_IS_ORIGINAL = true;
+
+interface RawFileVersion {
+  backupFileName: string;
+  backupTime: string | null;
+}
+
+function scanFileChanges(raw: string): Map<string, Map<number, RawFileVersion>> {
+  const files = new Map<string, Map<number, RawFileVersion>>();
+  for (const line of raw.split('\n')) {
+    if (!line.includes('"file-history-snapshot"')) continue;
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const tracked = entry?.snapshot?.trackedFileBackups;
+    if (typeof tracked !== 'object' || tracked === null) continue;
+    for (const [key, v] of Object.entries(tracked as Record<string, any>)) {
+      if (typeof v?.backupFileName !== 'string' || !BACKUP_NAME.test(v.backupFileName)) continue;
+      const parent = typeof v.realParentDir === 'string' ? v.realParentDir : path.dirname(key);
+      const abs = path.join(parent, path.basename(key));
+      const version = typeof v.version === 'number' ? v.version : Number(v.backupFileName.split('@v')[1]);
+      let versions = files.get(abs);
+      if (!versions) {
+        versions = new Map();
+        files.set(abs, versions);
+      }
+      if (!versions.has(version)) {
+        versions.set(version, {
+          backupFileName: v.backupFileName,
+          backupTime: typeof v.backupTime === 'string' ? v.backupTime : null,
+        });
+      }
+    }
+  }
+  return files;
+}
+
+const fileChangesCache = new Map<string, { mtimeMs: number; files: Map<string, Map<number, RawFileVersion>> }>();
+
+/** Files edited in a session, with their file-history-backup version timeline. */
+export async function listFileChanges(slug: string, id: string): Promise<FileChange[]> {
+  if (!/^[\w-]+$/.test(id)) return [];
+  const full = path.join(projectDir(slug), `${id}.jsonl`);
+  let raw, stat;
+  try {
+    [raw, stat] = await Promise.all([fs.readFile(full, 'utf8'), fs.stat(full)]);
+  } catch {
+    return [];
+  }
+  let cached = fileChangesCache.get(full);
+  if (!cached || cached.mtimeMs !== stat.mtime.getTime()) {
+    cached = { mtimeMs: stat.mtime.getTime(), files: scanFileChanges(raw) };
+    fileChangesCache.set(full, cached);
+  }
+  const scanned = cached.files;
+
+  let onDisk = new Map<string, number>();
+  try {
+    const dir = path.join(FILE_HISTORY_DIR, id);
+    const names = await fs.readdir(dir);
+    const stats = await Promise.all(
+      names.map((n) =>
+        fs
+          .stat(path.join(dir, n))
+          .then((s) => [n, s.size] as const)
+          .catch(() => null),
+      ),
+    );
+    onDisk = new Map(stats.filter((x): x is readonly [string, number] => x !== null));
+  } catch {
+    // no file-history directory for this session
+  }
+
+  const out: FileChange[] = [];
+  for (const [p, versions] of scanned) {
+    const merged = new Map(versions);
+    const hash = [...merged.values()][0]!.backupFileName.split('@v')[0];
+    if (V1_IS_ORIGINAL && !merged.has(1) && onDisk.has(`${hash}@v1`)) {
+      merged.set(1, { backupFileName: `${hash}@v1`, backupTime: null });
+    }
+    out.push({
+      path: p,
+      versions: [...merged.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([version, v]) => ({
+          version,
+          backupFileName: v.backupFileName,
+          backupTime: v.backupTime,
+          exists: onDisk.has(v.backupFileName),
+          size: onDisk.get(v.backupFileName) ?? null,
+        })),
+    });
+  }
+  return out.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+const MAX_BACKUP_BYTES = 2 * 1024 * 1024;
+
+/** A file-history backup's content, from ~/.claude/file-history/<sessionId>/<backup>, clamped to 2 MB. */
+export async function getFileVersion(
+  id: string,
+  backup: string,
+): Promise<{ text: string; size: number; truncated: boolean } | null> {
+  if (!/^[\w-]+$/.test(id) || !BACKUP_NAME.test(backup)) return null;
+  try {
+    const full = path.join(FILE_HISTORY_DIR, id, backup);
+    const stat = await fs.stat(full);
+    const fd = await fs.open(full);
+    try {
+      const buf = Buffer.alloc(Math.min(stat.size, MAX_BACKUP_BYTES));
+      const { bytesRead } = await fd.read(buf, 0, buf.length, 0);
+      return { text: buf.toString('utf8', 0, bytesRead), size: stat.size, truncated: stat.size > MAX_BACKUP_BYTES };
+    } finally {
+      await fd.close();
+    }
+  } catch {
+    return null;
+  }
 }
 
 /** Bare-name deny rules currently in ~/.claude/settings.json permissions.deny. */
