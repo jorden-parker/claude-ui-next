@@ -6,7 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Design system: Geist only.** All UI work follows `DESIGN.md` (Vercel's
 Geist/brand guidelines) and the "Design system: Geist only" section of
-`AGENTS.md`. No other design system, component kit, palette, or font family.
+`AGENTS.md`. No other design system, palette, or font family. The single
+component kit is shadcn/ui (Base UI primitives in `components/ui/`), whose tokens
+are aliased onto Geist in `app/global.css` — read that section of `AGENTS.md`
+before touching it.
 
 ## Commands
 
@@ -51,4 +54,5 @@ Reads `~/.claude/projects/` at request time (`force-dynamic`). No database.
 - `lib/shared.ts` has route constants (`docsRoute`, `docsContentRoute`, etc.) and git config.
 - Tailwind v4 via `@tailwindcss/postcss`. Fumadocs CSS presets imported in `global.css`. Color tokens use `fd-*` prefix (from fumadocs-ui).
 - `cn` utility re-exported from `cnfast` at `lib/cn.ts`.
-- Geist tokens in `app/geist.css` drive the whole palette; `--color-fd-*` is remapped onto them. Vendored foundation for reference: `assets/vercel-brand.css`.
+- Geist tokens in `app/geist.css` drive the whole palette; `--color-fd-*` (fumadocs) and the shadcn tokens in `app/global.css` are both remapped onto them. Vendored foundation for reference: `assets/vercel-brand.css`.
+- `components/settings-shell.tsx` holds the layout shared by the Settings and Tools pages: sticky toolbar, collapsible group, ledger row, description trimming.

@@ -23,6 +23,13 @@ repo root is the authority; read it before changing any UI.
   always with a non-colour cue alongside it.
 - Prefer spacing, alignment, and a rule over a border or a box. Do not wrap
   every item in a card.
-- Do not add another design system, component kit, icon set, CSS framework,
-  colour palette, or font family. Do not invent new `--vbg-*` or
+- shadcn/ui is installed (`components.json`, `components/ui/`, Base UI + Lucide),
+  and it is the one exception to the rule below. It carries no palette of its own
+  here: `app/global.css` defines every shadcn token (`--background`, `--border`,
+  `--primary`, …) as an alias of a Geist token, the same way `--color-fd-*` is.
+  Add primitives with `bunx shadcn@latest add <name>`; never re-run `init`, which
+  would overwrite that bridge with the stock neutral palette. Do not give a
+  shadcn component a colour that is not already a Geist token.
+- Beyond shadcn, do not add another design system, component kit, icon set, CSS
+  framework, colour palette, or font family. Do not invent new `--vbg-*` or
   `--color-geist-*` token names.

@@ -24,8 +24,6 @@ export interface Field {
   docsUrl?: string;
   deprecated: boolean;
   managedOnly: boolean;
-  /** Read-only on this page; the description says where it is edited. */
-  readOnly?: string;
   group: string;
 }
 
@@ -239,6 +237,9 @@ export function listFields(): Field[] {
 
   function pushField(node: SchemaNode, path: string[]) {
     const key = path.join('.');
+    // Owned by the Tools page, which edits it as tool switches. Listing it here too
+    // would be the same setting in two places.
+    if (key === 'permissions.deny') return;
     const resolved = resolveRef(node);
     const { kind, options, customPattern, min, max } = kindOf(node);
     const description: string = typeof resolved.description === 'string' ? resolved.description : '';
@@ -257,11 +258,8 @@ export function listFields(): Field[] {
       docsUrl: firstUrl(description),
       deprecated,
       managedOnly,
-      group: key === 'permissions.deny' ? 'Permissions' : groupOf(key),
+      group: groupOf(key),
     };
-    if (key === 'permissions.deny') {
-      field.readOnly = 'Edited on the Tools page.';
-    }
     fields.push(field);
   }
 
