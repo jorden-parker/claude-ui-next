@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { DocsDescription, DocsPage, DocsTitle } from 'fumadocs-ui/layouts/docs/page';
-import { formatTokens, listSubagents, readTranscript } from '@/lib/claude/data';
+import { formatTokens, listSubagents, readSubagentTranscript } from '@/lib/claude/data';
 import { Transcript } from '@/components/transcript';
 
 export const dynamic = 'force-dynamic';
@@ -19,26 +19,25 @@ function formatDuration(startedAt: string | null, endedAt: string | null): strin
 export default async function Page({
   params,
 }: {
-  params: Promise<{ project: string; id: string }>;
+  params: Promise<{ project: string; id: string; agentId: string }>;
 }) {
-  const { project, id } = await params;
-  const [transcript, subagents] = await Promise.all([readTranscript(project, id), listSubagents(project, id)]);
+  const { project, id, agentId } = await params;
+  const [transcript, subagents] = await Promise.all([
+    readSubagentTranscript(project, id, agentId),
+    listSubagents(project, id),
+  ]);
   if (!transcript) notFound();
-
-  const base = `/p/${project}/session/${id}`;
-  const links = {
-    subagents: new Map(
-      subagents
-        .filter((s) => s.toolUseId !== null)
-        .map((s) => [s.toolUseId!, { href: `${base}/agent/${s.agentId}`, label: s.agentType ?? s.agentId }]),
-    ),
-    outputBase: `${base}/output`,
-  };
+  const meta = subagents.find((s) => s.agentId === agentId);
 
   return (
     <DocsPage>
-      <DocsTitle>Session</DocsTitle>
-      <DocsDescription className="mb-0 font-mono text-xs">{id}</DocsDescription>
+      <DocsTitle>Subagent · {meta?.agentType ?? agentId}</DocsTitle>
+      <DocsDescription className="mb-0">{meta?.description ?? 'No description recorded.'}</DocsDescription>
+      <p className="text-xs">
+        <Link href={`/p/${project}/session/${id}`} className="underline">
+          ← back to session
+        </Link>
+      </p>
       <div className="flex flex-wrap gap-x-4 gap-y-1 rounded border bg-fd-card px-3 py-2 font-mono text-xs text-fd-muted-foreground">
         {transcript.meta.model && <span>{transcript.meta.model}</span>}
         {transcript.meta.version && <span>v{transcript.meta.version}</span>}
@@ -71,24 +70,7 @@ export default async function Page({
           and turn totals cover only the blocks shown.
         </p>
       )}
-      {subagents.length > 0 && (
-        <details className="rounded-lg border bg-fd-card px-4 py-2 text-sm" open>
-          <summary className="cursor-pointer select-none text-xs font-medium uppercase tracking-wide text-fd-muted-foreground">
-            Subagents ({subagents.length})
-          </summary>
-          <ul className="mt-2 flex flex-col gap-1">
-            {subagents.map((s) => (
-              <li key={s.agentId} className="flex items-baseline gap-2">
-                <Link href={`${base}/agent/${s.agentId}`} className="font-mono text-xs underline">
-                  {s.agentType ?? 'agent'}
-                </Link>
-                <span className="min-w-0 flex-1 truncate">{s.description ?? s.agentId}</span>
-              </li>
-            ))}
-          </ul>
-        </details>
-      )}
-      <Transcript blocks={transcript.blocks} links={links} />
+      <Transcript blocks={transcript.blocks} />
     </DocsPage>
   );
 }
