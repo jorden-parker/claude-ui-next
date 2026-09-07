@@ -32,6 +32,7 @@ export async function buildGlobalTree(): Promise<Root> {
   if (settings !== null) {
     children.push({ type: 'page', name: 'Settings', url: '/global/settings' });
   }
+  children.push({ type: 'page', name: 'History', url: '/global/history' });
   if (plans.length > 0) {
     children.push({ type: 'page', name: `Plans (${plans.length})`, url: '/global/plans' });
   }

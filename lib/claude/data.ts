@@ -74,6 +74,19 @@ export interface Skill extends SkillEntry {
   files: string[];
 }
 
+export interface HistoryEntry {
+  display: string;
+  /** Absolute project path as recorded by Claude Code. */
+  project: string;
+  /** Matching directory under ~/.claude/projects, or null if it no longer exists. */
+  slug: string | null;
+  sessionId: string | null;
+  /** True only when the session transcript file exists (safe to link). */
+  hasSession: boolean;
+  /** Epoch milliseconds. */
+  timestamp: number;
+}
+
 export interface ProjectMemories {
   slug: string;
   realPath: string | null;
@@ -550,4 +563,55 @@ export async function getSkill(id: string): Promise<Skill | null> {
     content,
     files: entries.filter((f) => f !== 'SKILL.md').sort(),
   };
+}
+
+/** All prompts from ~/.claude/history.jsonl, newest first. */
+export async function getHistory(): Promise<HistoryEntry[]> {
+  let raw;
+  try {
+    raw = await fs.readFile(path.join(CLAUDE_DIR, 'history.jsonl'), 'utf8');
+  } catch {
+    return [];
+  }
+  let projectDirs: Set<string>;
+  try {
+    projectDirs = new Set(await fs.readdir(PROJECTS_DIR));
+  } catch {
+    projectDirs = new Set();
+  }
+
+  // One readdir per referenced project, cached — not one stat per history line.
+  const sessionCache = new Map<string, Set<string>>();
+  async function sessionIds(slug: string): Promise<Set<string>> {
+    let ids = sessionCache.get(slug);
+    if (!ids) {
+      try {
+        const files = await fs.readdir(path.join(PROJECTS_DIR, slug));
+        ids = new Set(files.filter((f) => f.endsWith('.jsonl')).map((f) => f.replace(/\.jsonl$/, '')));
+      } catch {
+        ids = new Set();
+      }
+      sessionCache.set(slug, ids);
+    }
+    return ids;
+  }
+
+  const entries: HistoryEntry[] = [];
+  for (const line of raw.split('\n')) {
+    if (line.trim() === '') continue;
+    let parsed;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (typeof parsed?.display !== 'string' || typeof parsed?.timestamp !== 'number') continue;
+    const project = typeof parsed.project === 'string' ? parsed.project : '';
+    const candidate = project.replace(/[^a-zA-Z0-9]/g, '-');
+    const slug = projectDirs.has(candidate) ? candidate : null;
+    const sessionId = typeof parsed.sessionId === 'string' ? parsed.sessionId : null;
+    const hasSession = slug !== null && sessionId !== null && (await sessionIds(slug)).has(sessionId);
+    entries.push({ display: parsed.display, project, slug, sessionId, hasSession, timestamp: parsed.timestamp });
+  }
+  return entries.sort((a, b) => b.timestamp - a.timestamp);
 }
