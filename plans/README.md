@@ -17,7 +17,7 @@ before starting, honor its STOP conditions, and update your row when done.
 | 004  | Skills browser at /global/skills | P2 | M | — | DONE |
 | 005  | Prompt history at /global/history | P2 | M | — | DONE |
 | 006  | Transcript improvements (timestamps, user markdown, metadata header) | P2 | M | 001 (soft) | DONE |
-| 007  | Tool budget page at /global/tools (usage stats + per-tool switches + presets) | P2 | M | — | TODO |
+| 007  | Tool budget page at /global/tools (usage stats + per-tool switches + presets) | P2 | M | — | DONE on branch `advisor/007-tool-budget-presets`; live toggle (Step 8.6) left to the repo owner |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale)
 
